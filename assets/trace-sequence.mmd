@@ -1,0 +1,75 @@
+sequenceDiagram
+    actor F as 🌾 种植户/管理员
+    participant FE as 💻 金生链 前端
+    participant BE as ⚙️ FastAPI 后端
+    participant BC as ⛓️ 智能合约 PeanutTrace
+    participant IPFS as 📦 IPFS
+    participant DB as 🗄️ MySQL
+
+    Note over F,DB: 阶段 1：种子批次登记「上链点 ①」
+    F->>FE: 提交种子供应商 & 批次信息
+    FE->>BE: POST /api/blockchain/seed/register
+    BE->>BE: SHA256 哈希 + ECDSA 签名
+    BE->>IPFS: add_json_data 批次附件
+    IPFS-->>BE: 返回 CID
+    BE->>BC: addRecord batchCode stage hash signature cid
+    BC-->>BE: tx_hash + block_number
+    BE->>DB: INSERT blockchain_record + seed_batch
+    BE-->>FE: 🔔 种子上链成功通知 admin
+
+    Note over F,DB: 阶段 2：种植记录「上链点 ②」→ 田间管理
+    F->>FE: 登记种植地块 · 播种量
+    FE->>BE: POST /api/planting/records
+    BE->>BC: addRecord 种植
+    BE->>DB: 写入 planting_record
+
+    loop 3 秒周期采集 传感器三模式
+        F->>FE: 选地块 → 硬件/模拟/手动录入
+        FE->>BE: POST /api/measurements/data plot_code=P001
+        BE->>DB: INSERT measurement + environmental_data
+        BE->>BE: WS 广播 → 首页环境卡片 5 秒刷新
+    end
+
+    Note over F,DB: 阶段 3：农药施用「上链点 ③」+ 农残检测
+    F->>FE: 登记农药名称 / 用量 / 安全间隔期
+    FE->>BE: POST /api/pesticide/applications
+    BE->>BC: addRecord 农药
+    BE->>DB: 写入 pesticide_application
+    BE-->>FE: 🔔 管理员通知
+
+    Note over F,DB: 阶段 4：田间检测报告「上链点 ④」
+    F->>FE: 编写检测报告 合格/不合格
+    FE->>BE: POST /api/inspection/reports
+    BE->>BC: addRecord 田间检测
+    BE->>DB: 写入 inspection_report
+    BE-->>FE: 🔔 质检员+管理员通知 不合格时为 warning
+
+    Note over F,DB: 阶段 5：采收「上链点 ⑤」→ 加工「上链点 ⑥」→ 成品质检「上链点 ⑦」
+    F->>BE: 采收登记 → 加工批次 → 成品质检
+    BE->>BC: 三次 addRecord 上链
+    BE->>DB: 三次 DB 写入
+
+    Note over F,DB: 阶段 6：成品入库「上链点 ⑧」
+    F->>FE: 入库 → 库存项增加
+    FE->>BE: POST /api/inventory/transactions 出入库交易
+    alt 库存 < 阈值 min_stock
+        BE-->>FE: 🔔 仓管员+管理员 库存预警通知
+    end
+
+    Note over F,DB: 阶段 7：物流发货「上链点 ⑨」
+    actor S as 💰 销售人员
+    S->>FE: 创建订单 → 发货
+    FE->>BE: POST /sales/orders
+    BE->>BC: addRecord 物流
+    BE->>DB: 更新物流状态机
+    BE-->>FE: 🔔 销售员+管理员 新订单通知
+
+    Note over F,DB: 阶段 8：销售出库「上链点 ⑩」· 消费者扫码溯源
+    actor C as 🛒 消费者 / 评委
+    C->>FE: 扫码 → /trace 溯源查询
+    FE->>BE: GET /api/sales/trace_by_batch
+    BE->>DB: 聚合 9 模块数据 + 链记录
+    BE->>BC: verify_chain_integrity 哈希校验
+    BC-->>BE: 链上哈希 vs 数据库哈希 → 一致✅
+    BE-->>FE: 返回全链路溯源数据 + 链验证结果
+    FE-->>C: 时间线展示 种子→种植→农药→检测→加工→库存→销售

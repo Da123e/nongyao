@@ -1,0 +1,20 @@
+{
+  "theme": "default",
+  "backgroundColor": "#ffffff",
+  "flowchart": {
+    "curve": "basis",
+    "nodeSpacing": 40,
+    "rankSpacing": 40,
+    "padding": 20
+  },
+  "sequence": {
+    "width": 800,
+    "wrap": true,
+    "padding": 20,
+    "diagramMarginX": 50,
+    "diagramMarginY": 20,
+    "actorMargin": 100,
+    "boxMargin": 10
+  },
+  "viewBox": "0 0 2000 2000"
+}
