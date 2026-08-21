@@ -1,0 +1,42 @@
+# ====== 环境变量与密钥 · 禁止提交 ======
+.env
+.env.*
+!.env.example
+backend/.env*
+!backend/.env.example
+frontend/.env*
+!frontend/.env.example
+docker-compose.override.yml
+# ====== 以上为新增强保护规则 ======
+node_modules/
+dist/
+build/
+.env.local
+*.pyc
+__pycache__/
+.pytest_cache/
+.coverage
+htmlcov/
+.idea/
+.vscode/
+.trae/
+.workbuddy/
+ipfs_bin/
+*.db
+.DS_Store
+Thumbs.db
+frontend/node_modules/
+frontend/dist/
+backend/__pycache__/
+# 临时脚本和聊天文件
+verify_auth.py
+Untitled Chat.md
+.git_commit_msg.txt
+*_probe_db.py
+*_audit_db.py
+# pytest 缓存
+.pytest_cache/
+backend/.pytest_cache/
+# Windows 桌面配置
+desktop.ini
+Thumbs.db
