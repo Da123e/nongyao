@@ -221,10 +221,10 @@ def migrate_environmental_data_columns():
 
 migrate_environmental_data_columns()
 
-app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION, redirect_slashes=False)
+from contextlib import asynccontextmanager
 
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app):
     from app.auth import seed_data
     from app.core.database import SessionLocal
     db = SessionLocal()
@@ -237,6 +237,10 @@ async def startup_event():
         traceback.print_exc()
     finally:
         db.close()
+    yield
+    cleanup_processes()
+
+app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION, redirect_slashes=False, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
