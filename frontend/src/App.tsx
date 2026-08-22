@@ -129,7 +129,12 @@ function AppContent() {
   return (
     <Routes>
       <Route path="/login" element={isLoggedIn ? <Navigate to="/" /> : <Login onLogin={handleLogin} />} />
-      
+
+      {/* 消费者公开溯源入口：无需登录即可扫码查询 */}
+      {!isLoggedIn && (
+        <Route path="/trace" element={<ErrorBoundary><TraceQuery /></ErrorBoundary>} />
+      )}
+
       <Route path="/" element={isLoggedIn ? <Layout onLogout={handleLogout} /> : <Navigate to="/login" />}>
         <Route index element={
           userRole === 'warehouse_manager' ? (
@@ -189,8 +194,7 @@ function AppContent() {
         } />
       </Route>
 
-      {/* 未知路径：登录用户跳 /trace（全角色可访问），未登录跳 /login */}
-      <Route path="*" element={<Navigate to={isLoggedIn ? "/trace" : "/login"} replace />} />
+      <Route path="*" element={<Navigate to="/trace" replace />} />
     </Routes>
   );
 }

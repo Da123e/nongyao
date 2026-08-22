@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Wheat, Lock, User, Eye, EyeOff, Users } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Wheat, Lock, User, Eye, EyeOff, Shield, Search, Sparkles } from 'lucide-react';
 import { authApi } from '../services/api';
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
@@ -9,40 +10,12 @@ interface LoginProps {
   onLogin: () => void;
 }
 
-type RoleType = 'admin' | 'farmer' | 'inspector' | 'warehouse_manager' | 'salesperson';
-
-const roleOptions: { value: RoleType; label: string; description: string; icon: string }[] = [
-  { value: 'admin', label: '系统管理员', description: '管理系统所有功能', icon: '👨‍💼' },
-  { value: 'farmer', label: '种植户', description: '管理种植和农药', icon: '👨‍🌾' },
-  { value: 'inspector', label: '质检员', description: '管理质量检测', icon: '🔬' },
-  { value: 'warehouse_manager', label: '仓库管理员', description: '管理库存', icon: '🏭' },
-  { value: 'salesperson', label: '销售人员', description: '管理销售', icon: '💼' },
-];
-
-// 快速体验填充：仅用于本地演示/功能测试，正式部署版本应移除该功能
-const roleDefaultUsers: Record<RoleType, { username: string; password: string }> = {
-  admin: { username: 'admin', password: '•（部署时另行设置）' },
-  farmer: { username: 'farmer', password: '•（部署时另行设置）' },
-  inspector: { username: 'inspector', password: '•（部署时另行设置）' },
-  warehouse_manager: { username: 'warehouse', password: '•（部署时另行设置）' },
-  salesperson: { username: 'sales', password: '•（部署时另行设置）' },
-};
-
 export function Login({ onLogin }: LoginProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [selectedRole, setSelectedRole] = useState<RoleType>('admin');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-
-  const handleRoleChange = (role: RoleType) => {
-    setSelectedRole(role);
-    const defaultUser = roleDefaultUsers[role];
-    setUsername(defaultUser.username);
-    setPassword(defaultUser.password);
-    setError('');
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,39 +44,18 @@ export function Login({ onLogin }: LoginProps) {
       <div className="absolute inset-0 overflow-hidden">
         <motion.div
           className="absolute top-20 left-10 w-72 h-72 bg-primary-300/30 rounded-full blur-3xl"
-          animate={{
-            x: [0, 50, 0],
-            y: [0, 30, 0],
-          }}
-          transition={{
-            duration: 8,
-            repeat: Infinity,
-            ease: 'easeInOut',
-          }}
+          animate={{ x: [0, 50, 0], y: [0, 30, 0] }}
+          transition={{ duration: 8, repeat: Infinity, ease: 'easeInOut' }}
         />
         <motion.div
           className="absolute bottom-20 right-10 w-96 h-96 bg-secondary-300/30 rounded-full blur-3xl"
-          animate={{
-            x: [0, -40, 0],
-            y: [0, -40, 0],
-          }}
-          transition={{
-            duration: 10,
-            repeat: Infinity,
-            ease: 'easeInOut',
-          }}
+          animate={{ x: [0, -40, 0], y: [0, -40, 0] }}
+          transition={{ duration: 10, repeat: Infinity, ease: 'easeInOut' }}
         />
         <motion.div
           className="absolute top-1/2 left-1/2 w-64 h-64 bg-accent-200/20 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2"
-          animate={{
-            scale: [1, 1.2, 1],
-            opacity: [0.3, 0.5, 0.3],
-          }}
-          transition={{
-            duration: 6,
-            repeat: Infinity,
-            ease: 'easeInOut',
-          }}
+          animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.5, 0.3] }}
+          transition={{ duration: 6, repeat: Infinity, ease: 'easeInOut' }}
         />
       </div>
 
@@ -151,35 +103,6 @@ export function Login({ onLogin }: LoginProps) {
                 </motion.div>
               )}
 
-              <div className="space-y-1.5">
-                <label className="block text-sm font-medium text-gray-700 flex items-center gap-2">
-                  <Users className="w-4 h-4" />
-                  选择角色
-                </label>
-                <div className="grid grid-cols-5 gap-2">
-                  {roleOptions.map((role) => (
-                    <motion.button
-                      key={role.value}
-                      type="button"
-                      onClick={() => handleRoleChange(role.value)}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition-all duration-200 ${
-                        selectedRole === role.value
-                          ? 'border-primary-500 bg-primary-50 text-primary-700 shadow-md shadow-primary-100'
-                          : 'border-gray-200 hover:border-primary-300 hover:bg-gray-50 text-gray-600'
-                      }`}
-                    >
-                      <span className="text-xl mb-1">{role.icon}</span>
-                      <span className="text-xs font-medium">{role.label}</span>
-                    </motion.button>
-                  ))}
-                </div>
-                <p className="text-xs text-gray-500 text-center">
-                  {roleOptions.find(r => r.value === selectedRole)?.description}
-                </p>
-              </div>
-
               <Input
                 label="用户名"
                 type="text"
@@ -213,35 +136,37 @@ export function Login({ onLogin }: LoginProps) {
                 </div>
               </div>
 
-              <motion.div
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-              >
-                <Button
-                  type="submit"
-                  variant="primary"
-                  size="lg"
-                  loading={loading}
-                  className="w-full rounded-xl"
-                >
+              <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+                <Button type="submit" variant="primary" size="lg" loading={loading} className="w-full rounded-xl">
                   {loading ? '登录中...' : '登录'}
                 </Button>
               </motion.div>
+            </motion.form>
 
-              <div className="bg-gray-50 rounded-xl p-4">
-                <h4 className="text-sm font-medium text-gray-700 mb-2">测试账号</h4>
-                <div className="grid grid-cols-1 gap-2 text-xs">
-                  {roleOptions.map((role) => (
-                    <div key={role.value} className="flex justify-between items-center text-gray-600">
-                      <span>{role.icon} {role.label}</span>
-                      <span className="text-gray-500">
-                        {roleDefaultUsers[role.value].username} / {roleDefaultUsers[role.value].password}
-                      </span>
-                    </div>
-                  ))}
+            <div className="mt-6 pt-6 border-t border-gray-100">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div className="flex flex-col items-center gap-1.5 p-3 bg-green-50 rounded-xl">
+                  <Shield className="w-5 h-5 text-green-600" />
+                  <span className="text-xs text-gray-600">区块链存证</span>
+                </div>
+                <div className="flex flex-col items-center gap-1.5 p-3 bg-blue-50 rounded-xl">
+                  <Sparkles className="w-5 h-5 text-blue-600" />
+                  <span className="text-xs text-gray-600">IoT 实时监测</span>
+                </div>
+                <div className="flex flex-col items-center gap-1.5 p-3 bg-purple-50 rounded-xl">
+                  <Wheat className="w-5 h-5 text-purple-600" />
+                  <span className="text-xs text-gray-600">全产业链</span>
                 </div>
               </div>
-            </motion.form>
+
+              <Link
+                to="/trace"
+                className="mt-4 flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-primary-50 to-secondary-50 border border-primary-200 rounded-xl text-sm font-medium text-primary-700 hover:from-primary-100 hover:to-secondary-100 transition-all"
+              >
+                <Search className="w-4 h-4" />
+                消费者溯源查询入口
+              </Link>
+            </div>
           </div>
         </div>
 

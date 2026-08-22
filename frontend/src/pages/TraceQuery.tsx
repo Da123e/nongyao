@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Search, Wheat, Leaf, FlaskConical, FileText, Factory, Package, ShoppingCart, CheckCircle, Download, ChevronRight, AlertCircle } from 'lucide-react';
 import { api, inspectionApi } from '../services/api';
 import { getCurrentUserRole, canExportTracePdf } from '../utils/roles';
@@ -157,7 +158,8 @@ export function TraceQuery() {
     setError('');
 
     try {
-      const res = await api.get(`/sales/trace/${batchCode.trim()}`);
+      const endpoint = userRole ? `/sales/trace/${batchCode.trim()}` : `/sales/public/trace/${batchCode.trim()}`;
+      const res = await api.get(endpoint);
       setTraceData(res.data);
     } catch (err: any) {
       console.error('Failed to fetch trace data:', err);
@@ -217,7 +219,30 @@ export function TraceQuery() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="min-h-screen bg-gradient-to-br from-primary-50/30 via-white to-blue-50/30">
+      {!userRole && (
+        <header className="bg-white/80 backdrop-blur-md border-b border-gray-100 sticky top-0 z-30">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
+            <Link to="/trace" className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-gradient-to-br from-primary-500 to-primary-700 rounded-xl flex items-center justify-center shadow-md">
+                <Wheat className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <h1 className="font-bold text-gray-800 text-lg">金生链</h1>
+                <p className="text-xs text-gray-500">花生全产业链溯源平台</p>
+              </div>
+            </Link>
+            <Link
+              to="/login"
+              className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-xl text-sm font-medium transition-colors"
+            >
+              管理员登录
+            </Link>
+          </div>
+        </header>
+      )}
+
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-6">
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center">
         <div className="w-16 h-16 bg-gradient-to-br from-green-500 to-green-700 rounded-full flex items-center justify-center mx-auto mb-6">
           <Search className="w-8 h-8 text-white" />
@@ -778,6 +803,7 @@ export function TraceQuery() {
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }

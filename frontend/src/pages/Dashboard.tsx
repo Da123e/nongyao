@@ -37,6 +37,9 @@ import {
   Beaker,
   Ruler,
   Flame,
+  Link2,
+  Boxes,
+  Search,
 } from 'lucide-react';
 import { inventoryApi, authApi, blockchainApi, statisticsApi, operationsApi, measurementApi } from '../services/api';
 import { resolveUserRole } from '../utils/auth';
@@ -715,6 +718,90 @@ function RecentOperations() {
   );
 }
 
+function BlockchainHighlight({ connected, ipfsConnected }: { connected: boolean; ipfsConnected: boolean }) {
+  const navigate = useNavigate();
+  const chainPoints = [
+    { label: '种子采购', icon: Wheat, color: 'bg-green-100 text-green-600' },
+    { label: '种植记录', icon: Leaf, color: 'bg-emerald-100 text-emerald-600' },
+    { label: '农药使用', icon: FlaskConical, color: 'bg-blue-100 text-blue-600' },
+    { label: '检测报告', icon: FileText, color: 'bg-purple-100 text-purple-600' },
+    { label: '加工生产', icon: Factory, color: 'bg-orange-100 text-orange-600' },
+    { label: '成品入库', icon: Package, color: 'bg-cyan-100 text-cyan-600' },
+    { label: '物流发货', icon: Truck, color: 'bg-indigo-100 text-indigo-600' },
+    { label: '终端销售', icon: ShoppingCart, color: 'bg-pink-100 text-pink-600' },
+    { label: '环境数据', icon: Activity, color: 'bg-teal-100 text-teal-600' },
+    { label: '溯源验证', icon: Shield, color: 'bg-red-100 text-red-600' },
+  ];
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-600 via-purple-600 to-blue-700 p-6 sm:p-8 text-white shadow-2xl"
+    >
+      <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full -translate-y-1/2 translate-x-1/2" />
+      <div className="absolute bottom-0 left-0 w-48 h-48 bg-white/5 rounded-full translate-y-1/2 -translate-x-1/2" />
+
+      <div className="relative z-10">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <Link2 className="w-6 h-6 text-blue-200" />
+              <h3 className="text-xl sm:text-2xl font-bold">区块链全链路存证</h3>
+              <span className="px-2.5 py-1 bg-white/15 backdrop-blur-sm rounded-full text-xs font-semibold">
+                10 个上链点
+              </span>
+            </div>
+            <p className="text-blue-100 text-sm">从种子到货架，全流程数据上链，不可篡改、可追溯</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-full backdrop-blur-sm ${connected ? 'bg-green-500/20 border border-green-500/30' : 'bg-red-500/20 border border-red-500/30'}`}>
+              <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
+              <span className="text-xs font-semibold">{connected ? '链节点在线' : '链节点离线'}</span>
+            </div>
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-full backdrop-blur-sm ${ipfsConnected ? 'bg-green-500/20 border border-green-500/30' : 'bg-red-500/20 border border-red-500/30'}`}>
+              <Boxes className="w-3.5 h-3.5 text-blue-200" />
+              <span className="text-xs font-semibold">{ipfsConnected ? 'IPFS在线' : 'IPFS离线'}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-10 gap-2">
+          {chainPoints.map((point, index) => {
+            const Icon = point.icon;
+            return (
+              <motion.div
+                key={point.label}
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: index * 0.05 }}
+                whileHover={{ y: -2, scale: 1.05 }}
+                className="flex flex-col items-center gap-2 p-3 bg-white/10 backdrop-blur-sm rounded-xl border border-white/10 hover:bg-white/15 transition-all cursor-pointer"
+                onClick={() => navigate('/trace')}
+              >
+                <div className={`w-9 h-9 rounded-lg ${point.color} flex items-center justify-center`}>
+                  <Icon className="w-5 h-5" />
+                </div>
+                <span className="text-[11px] text-center text-blue-50 font-medium">{point.label}</span>
+              </motion.div>
+            );
+          })}
+        </div>
+
+        <motion.button
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          onClick={() => navigate('/trace')}
+          className="mt-5 flex items-center gap-2 px-5 py-2.5 bg-white/15 hover:bg-white/25 backdrop-blur-sm rounded-xl text-sm font-medium transition-all"
+        >
+          <Search className="w-4 h-4" />
+          查看溯源链路
+        </motion.button>
+      </div>
+    </motion.div>
+  );
+}
+
 export function Dashboard() {
   const [stats, setStats] = useState<Stats>({
     seedBatches: 0,
@@ -903,6 +990,8 @@ export function Dashboard() {
         wsConnected={wsConnected}
         syncStatus={syncStatus}
       />
+
+      <BlockchainHighlight connected={blockchainConnected} ipfsConnected={ipfsConnected} />
 
       {userRole === 'admin' && <AdminOverview stats={stats} />}
 

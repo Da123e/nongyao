@@ -299,14 +299,7 @@ async def update_logistics(
     return {"message": "Logistics tracking updated successfully"}
 
 
-@router.get("/trace/{batch_code}", response_model=dict)
-async def trace_by_batch(
-    batch_code: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-):
-    await require_permission("trace:query", current_user, db)
-    
+async def _build_trace_data(batch_code: str, db: Session) -> dict:
     from app.models.seed import SeedBatch, SeedSupplier
     from app.models.planting import PlantingRecord, Plot, FarmingActivity, EnvironmentalData
     from app.models.pesticide import PesticideApplication, Pesticide
@@ -314,15 +307,15 @@ async def trace_by_batch(
     from app.models.processing import ProcessingBatch, ProcessingRecord
     from app.models.inventory import InventoryItem
     from app.models.sales import OrderItem, Order
-    
+
     seed_batch = db.query(SeedBatch).filter(SeedBatch.batch_code == batch_code).first()
     if not seed_batch:
         raise HTTPException(status_code=404, detail="Batch not found")
-    
+
     supplier = db.query(SeedSupplier).filter(SeedSupplier.id == seed_batch.supplier_id).first()
-    
+
     planting_records = db.query(PlantingRecord).filter(PlantingRecord.batch_id == seed_batch.id).all()
-    
+
     trace_data = {
         "seed_batch": {
             "batch_code": seed_batch.batch_code,
@@ -342,14 +335,14 @@ async def trace_by_batch(
         "inventory": [],
         "sales": [],
     }
-    
+
     for record in planting_records:
         plot = db.query(Plot).filter(Plot.id == record.plot_id).first()
         activities = db.query(FarmingActivity).filter(FarmingActivity.plot_id == record.plot_id).all()
         env_data = db.query(EnvironmentalData).filter(EnvironmentalData.plot_id == record.plot_id).order_by(EnvironmentalData.record_time.desc()).limit(10).all()
-        
+
         applications = db.query(PesticideApplication).filter(PesticideApplication.plot_id == record.plot_id).all()
-        
+
         trace_data["planting"].append({
             "plot_code": plot.plot_code if plot else None,
             "plot_name": plot.name if plot else None,
@@ -386,7 +379,7 @@ async def trace_by_batch(
                 for e in env_data
             ],
         })
-        
+
         for app in applications:
             pesticide = db.query(Pesticide).filter(Pesticide.id == app.pesticide_id).first()
             trace_data["pesticide_applications"].append({
@@ -400,7 +393,7 @@ async def trace_by_batch(
                 "safety_interval_end": app.safety_interval_end.isoformat() if app.safety_interval_end else None,
                 "is_compliant": app.is_compliant,
             })
-    
+
     inspections = db.query(InspectionReport).filter(InspectionReport.batch_id == seed_batch.id).all()
     for insp in inspections:
         residues = db.query(PesticideResidueTest).filter(PesticideResidueTest.report_id == insp.id).all()
@@ -422,7 +415,7 @@ async def trace_by_batch(
                 for r in residues
             ],
         })
-    
+
     processing_batches = db.query(ProcessingBatch).filter(ProcessingBatch.seed_batch_id == seed_batch.id).all()
     for pb in processing_batches:
         records = db.query(ProcessingRecord).filter(ProcessingRecord.batch_id == pb.id).all()
@@ -444,11 +437,11 @@ async def trace_by_batch(
                 for pr in records
             ],
         })
-    
+
     processing_batch_codes = [pb.batch_code for pb in processing_batches]
-    
+
     inventory_items = db.query(InventoryItem).filter(
-        InventoryItem.batch_code.in_(processing_batch_codes) | 
+        InventoryItem.batch_code.in_(processing_batch_codes) |
         (InventoryItem.seed_batch_code == seed_batch.batch_code)
     ).all()
     for item in inventory_items:
@@ -459,9 +452,9 @@ async def trace_by_batch(
             "unit": item.unit,
             "status": item.status,
         })
-    
+
     order_items = db.query(OrderItem).filter(
-        OrderItem.batch_code.in_(processing_batch_codes) | 
+        OrderItem.batch_code.in_(processing_batch_codes) |
         (OrderItem.seed_batch_code == batch_code)
     ).all()
     for oi in order_items:
@@ -475,5 +468,23 @@ async def trace_by_batch(
             "order_date": order.order_date.isoformat() if order and order.order_date else None,
             "status": order.status if order else None,
         })
-    
+
     return trace_data
+
+
+@router.get("/trace/{batch_code}", response_model=dict)
+async def trace_by_batch(
+    batch_code: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    await require_permission("trace:query", current_user, db)
+    return await _build_trace_data(batch_code, db)
+
+
+@router.get("/public/trace/{batch_code}", response_model=dict)
+async def public_trace_by_batch(
+    batch_code: str,
+    db: Session = Depends(get_db),
+):
+    return await _build_trace_data(batch_code, db)
