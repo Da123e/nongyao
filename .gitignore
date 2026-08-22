@@ -40,6 +40,8 @@ backend/.pytest_cache/
 # Windows 桌面配置
 desktop.ini
 Thumbs.db
+# 合约部署临时文件
+backend/contracts/contract_address.txt
 # 比赛文件与临时截图（不入库）
 .pdf_pages/
 *.pdf

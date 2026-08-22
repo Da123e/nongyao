@@ -48,9 +48,11 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token")
 
 def generate_wallet():
     account = Account.create()
+    pk_bytes = account.key
+    pub_key = account._key_obj.public_key
     return {
-        "private_key": account.key.hex(),
-        "public_key": account.public_key.hex(),
+        "private_key": pk_bytes.hex(),
+        "public_key": pub_key.to_bytes().hex(),
         "wallet_address": account.address,
     }
 
