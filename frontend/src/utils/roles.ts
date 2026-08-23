@@ -36,6 +36,11 @@ export const canManagePesticide = (): boolean => {
   return role === 'admin' || role === 'farmer';
 };
 
+export const canManagePesticideCatalog = (): boolean => {
+  const role = getCurrentUserRole();
+  return role === 'admin';
+};
+
 export const canCreateInspection = (): boolean => {
   const role = getCurrentUserRole();
   return role === 'admin' || role === 'inspector';
@@ -44,6 +49,11 @@ export const canCreateInspection = (): boolean => {
 export const canManageInventory = (): boolean => {
   const role = getCurrentUserRole();
   return role === 'admin' || role === 'warehouse_manager';
+};
+
+export const canManageProcessing = (): boolean => {
+  const role = getCurrentUserRole();
+  return role === 'admin';
 };
 
 export const canManageSales = (): boolean => {

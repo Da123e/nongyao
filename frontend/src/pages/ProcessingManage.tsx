@@ -3,6 +3,7 @@ import { Plus, Search, Factory, Clock, X, Eye, ChevronDown, ChevronUp, Link2 } f
 import { processingApi, seedApi } from '../services/api';
 import type { ProcessingBatch, ProcessingRecord, SeedBatch } from '../types/index.ts';
 import { BatchChainView } from '../components/BatchChainView';
+import { canManageProcessing } from '../utils/roles';
 
 const batchColors = [
   'bg-green-500',
@@ -135,10 +136,12 @@ export function ProcessingManage() {
             ))}
           </select>
         </div>
-        <button onClick={handleCreate} className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors">
-          <Plus className="w-4 h-4" />
-          添加批次
-        </button>
+        {canManageProcessing() && (
+          <button onClick={handleCreate} className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors">
+            <Plus className="w-4 h-4" />
+            添加批次
+          </button>
+        )}
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">

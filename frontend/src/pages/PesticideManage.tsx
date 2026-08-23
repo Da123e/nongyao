@@ -3,7 +3,7 @@ import { Plus, Search, Eye, FlaskConical, ShoppingCart, X, Link2, Leaf } from 'l
 import { api, seedApi } from '../services/api';
 import type { SeedBatch } from '../types';
 import { BatchChainView } from '../components/BatchChainView';
-import { canManagePesticide } from '../utils/roles';
+import { canManagePesticide, canManagePesticideCatalog } from '../utils/roles';
 
 const batchColors = [
   'bg-green-500',
@@ -271,7 +271,7 @@ export function PesticideManage() {
           </div>
           {canManagePesticide() && (
             <>
-              {activeTab === 'pesticides' && (
+              {activeTab === 'pesticides' && canManagePesticideCatalog() && (
                 <button onClick={handleAddPesticide} className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors">
                   <Plus className="w-4 h-4" />
                   添加农药
