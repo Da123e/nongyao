@@ -21,16 +21,16 @@ import { api, authApi } from './services/api';
 import { resolveUserRole } from './utils/auth';
 
 const routePermissions: Record<string, string[]> = {
-  '/': ['admin', 'farmer', 'inspector'],
+  '/': ['admin', 'farmer', 'inspector', 'warehouse_manager', 'salesperson'],
   '/seed': ['admin', 'farmer'],
   '/planting': ['admin', 'farmer'],
   '/pesticide': ['admin', 'farmer'],
   '/inspection': ['admin', 'inspector'],
-  '/processing': ['admin'],
+  '/processing': ['admin', 'warehouse_manager'],
   '/inventory': ['admin', 'warehouse_manager'],
   '/sales': ['admin', 'salesperson'],
   '/trace': ['admin', 'farmer', 'inspector', 'warehouse_manager', 'salesperson'],
-  '/sensor': ['admin', 'farmer', 'inspector'],
+  '/sensor': ['admin', 'farmer', 'inspector', 'warehouse_manager', 'salesperson'],
 };
 
 function AppContent() {
@@ -89,14 +89,11 @@ function AppContent() {
     const userInfoStr = localStorage.getItem('user_info');
     if (!token) { return; }
     api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-    let redirectPath = '/';
     let role = '';
     if (userInfoStr) {
       try {
         const parsed = JSON.parse(userInfoStr);
         role = resolveUserRole(parsed);
-        if (role === 'warehouse_manager') redirectPath = '/inventory';
-        if (role === 'salesperson') redirectPath = '/sales';
       } catch {
         role = '';
       }
@@ -112,7 +109,7 @@ function AppContent() {
     // 一次性同时设置，避免中间不一致状态导致路由跳转循环
     setUserRole(role);
     setIsLoggedIn(true);
-    navigate(redirectPath);
+    navigate('/');
   }, [navigate]);
 
   const handleLogout = useCallback(() => {
@@ -137,15 +134,9 @@ function AppContent() {
 
       <Route path="/" element={isLoggedIn ? <Layout onLogout={handleLogout} /> : <Navigate to="/login" />}>
         <Route index element={
-          userRole === 'warehouse_manager' ? (
-            <Navigate to="/inventory" replace />
-          ) : userRole === 'salesperson' ? (
-            <Navigate to="/sales" replace />
-          ) : (
-            <ProtectedRoute allowedRoles={routePermissions['/']} userRole={userRole}>
-              <ErrorBoundary><Dashboard /></ErrorBoundary>
-            </ProtectedRoute>
-          )
+          <ProtectedRoute allowedRoles={routePermissions['/']} userRole={userRole}>
+            <ErrorBoundary><Dashboard /></ErrorBoundary>
+          </ProtectedRoute>
         } />
         <Route path="seed" element={
           <ProtectedRoute allowedRoles={routePermissions['/seed']} userRole={userRole}>

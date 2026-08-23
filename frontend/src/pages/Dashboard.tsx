@@ -77,18 +77,33 @@ const roleStats: Record<string, { label: string; icon: any; color: string; key: 
     { label: '种子批次', icon: Wheat, color: 'green', key: 'seedBatches', path: '/seed' },
     { label: '种植地块', icon: Leaf, color: 'emerald', key: 'plantingPlots', path: '/planting' },
     { label: '农药种类', icon: FlaskConical, color: 'blue', key: 'pesticides', path: '/pesticide' },
+    { label: '检测报告', icon: FileText, color: 'purple', key: 'reports', path: '/inspection' },
+    { label: '加工批次', icon: Factory, color: 'orange', key: 'processingBatches', path: '/processing' },
+    { label: '待处理告警', icon: AlertTriangle, color: 'red', key: 'alerts', path: '/inventory' },
   ],
   inspector: [
     { label: '检测报告', icon: FileText, color: 'purple', key: 'reports', path: '/inspection' },
     { label: '合格报告', icon: CheckCircle, color: 'emerald', key: 'qualifiedReports', path: '/inspection' },
     { label: '待审核', icon: AlertTriangle, color: 'orange', key: 'pendingReviews', path: '/inspection' },
+    { label: '不合格数', icon: AlertTriangle, color: 'red', key: 'overLimitCount', path: '/inspection' },
+    { label: '种子批次', icon: Wheat, color: 'green', key: 'seedBatches', path: '/seed' },
+    { label: '种植地块', icon: Leaf, color: 'emerald', key: 'plantingPlots', path: '/planting' },
   ],
   warehouse_manager: [
     { label: '库存商品', icon: Package, color: 'cyan', key: 'inventoryItems', path: '/inventory' },
     { label: '待处理告警', icon: AlertTriangle, color: 'red', key: 'alerts', path: '/inventory' },
+    { label: '加工批次', icon: Factory, color: 'orange', key: 'processingBatches', path: '/processing' },
+    { label: '销售订单', icon: ShoppingCart, color: 'pink', key: 'orders', path: '/sales' },
+    { label: '种子批次', icon: Wheat, color: 'green', key: 'seedBatches', path: '/seed' },
+    { label: '合格报告', icon: CheckCircle, color: 'emerald', key: 'qualifiedReports', path: '/inspection' },
   ],
   salesperson: [
     { label: '销售订单', icon: ShoppingCart, color: 'pink', key: 'orders', path: '/sales' },
+    { label: '待发货', icon: Truck, color: 'orange', key: 'pendingOrders', path: '/sales' },
+    { label: '库存商品', icon: Package, color: 'cyan', key: 'inventoryItems', path: '/inventory' },
+    { label: '合格报告', icon: CheckCircle, color: 'emerald', key: 'qualifiedReports', path: '/inspection' },
+    { label: '种子批次', icon: Wheat, color: 'green', key: 'seedBatches', path: '/seed' },
+    { label: '今日订单', icon: Calendar, color: 'blue', key: 'todayOrders', path: '/sales' },
   ],
 };
 

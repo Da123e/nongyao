@@ -333,13 +333,16 @@ async def seed_data(db: Session = Depends(get_db)):
         ],
         "warehouse_manager": [
             "seed:query",
+            "processing:query",
             "inventory:manage", "inventory:query",
             "trace:query",
+            "sensors:query",
         ],
         "salesperson": [
             "seed:query",
             "sales:manage", "sales:query",
             "trace:query",
+            "sensors:query",
         ],
     }
 

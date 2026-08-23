@@ -41,16 +41,16 @@ interface LayoutProps {
 }
 
 const menuItems = [
-  { path: '/', icon: LayoutDashboard, label: '首页', description: '数据概览', roles: ['admin', 'farmer', 'inspector'] },
+  { path: '/', icon: LayoutDashboard, label: '首页', description: '数据概览', roles: ['admin', 'farmer', 'inspector', 'warehouse_manager', 'salesperson'] },
   { path: '/seed', icon: Wheat, label: '种子溯源', description: '供应商与批次', roles: ['admin', 'farmer'] },
   { path: '/planting', icon: Leaf, label: '种植管理', description: '地块与记录', roles: ['admin', 'farmer'] },
   { path: '/pesticide', icon: FlaskConical, label: '农药管理', description: '采购与使用', roles: ['admin', 'farmer'] },
   { path: '/inspection', icon: FileText, label: '检测报告', description: '质检与残留', roles: ['admin', 'inspector'] },
-  { path: '/processing', icon: Factory, label: '加工管理', description: '生产记录', roles: ['admin'] },
+  { path: '/processing', icon: Factory, label: '加工管理', description: '生产记录', roles: ['admin', 'warehouse_manager'] },
   { path: '/inventory', icon: Package, label: '库存管理', description: '仓库与库存', roles: ['admin', 'warehouse_manager'] },
   { path: '/sales', icon: ShoppingCart, label: '销售管理', description: '订单与物流', roles: ['admin', 'salesperson'] },
   { path: '/trace', icon: Search, label: '溯源查询', description: '全链查询', roles: ['admin', 'farmer', 'inspector', 'warehouse_manager', 'salesperson'] },
-  { path: '/sensor', icon: Activity, label: '传感器', description: '数据查看', roles: ['admin', 'farmer', 'inspector'] },
+  { path: '/sensor', icon: Activity, label: '传感器', description: '数据查看', roles: ['admin', 'farmer', 'inspector', 'warehouse_manager', 'salesperson'] },
 ];
 
 const roleLabels: Record<string, { label: string; color: string; bg: string; gradient: string }> = {
