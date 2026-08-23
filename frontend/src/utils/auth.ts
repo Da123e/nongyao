@@ -68,14 +68,6 @@ export const getCurrentRole = (): UserRole => {
 };
 
 export const canViewSection = (section: string, role: UserRole): boolean => {
-  const permissions: Record<UserRole, string[]> = {
-    admin: ['seed', 'planting', 'pesticide', 'processing', 'inspection', 'inventory', 'sales'],
-    farmer: ['seed', 'planting', 'pesticide', 'inspection'],
-    inspector: ['seed', 'planting', 'pesticide', 'inspection'],
-    warehouse_manager: ['inspection', 'processing', 'inventory'],
-    salesperson: ['inspection', 'processing', 'inventory', 'sales'],
-    consumer: ['seed', 'planting', 'pesticide', 'inspection'],
-  };
-
-  return permissions[role]?.includes(section) || false;
+  const allSections = ['seed', 'planting', 'pesticide', 'processing', 'inspection', 'inventory', 'sales'];
+  return allSections.includes(section);
 };
