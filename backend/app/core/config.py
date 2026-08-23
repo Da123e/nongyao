@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     GANACHE_PRIVATE_KEY: Optional[str] = None
     IPFS_GATEWAY: str = "http://localhost:8080"
     IPFS_API_URL: str = "http://localhost:5001/api/v0"
+    FRONTEND_URL: str = "http://localhost:5173"
 
     model_config = {"extra": "ignore", "env_file": ".env"}
 

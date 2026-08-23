@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any, Tuple
 import logging
 from app.core.database import get_db
+from app.core.config import settings
 from app.core.blockchain import (
     add_record_to_blockchain, get_blockchain_data, verify_chain_integrity,
     generate_new_batch_id, calculate_hash, sign_data, verify_signature,
@@ -777,7 +778,7 @@ async def generate_qrcode_endpoint(
         "batch_id": batch_id,
         "seed_batch_id": seed_batch_id,
         "qrcode": qrcode_data,
-        "trace_url": f"http://localhost:8000/api/blockchain/consumer/trace/{seed_batch_id}"
+        "trace_url": f"{settings.FRONTEND_URL}/trace?batch={seed_batch_id}"
     }
 
 

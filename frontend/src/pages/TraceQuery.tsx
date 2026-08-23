@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Search, Wheat, Leaf, FlaskConical, FileText, Factory, Package, ShoppingCart, CheckCircle, Download, ChevronRight, AlertCircle } from 'lucide-react';
 import { api, inspectionApi } from '../services/api';
 import { getCurrentUserRole, canExportTracePdf } from '../utils/roles';
@@ -112,14 +112,15 @@ export function TraceQuery() {
   const [pdfLoading, setPdfLoading] = useState(false);
   const [error, setError] = useState('');
 
+  const [searchParams] = useSearchParams();
   const userRole = getCurrentUserRole();
 
   const roleStages: Record<string, string[]> = {
     admin: ['seed', 'planting', 'pesticide', 'inspection', 'processing', 'inventory', 'sales'],
-    farmer: ['seed', 'planting', 'pesticide', 'inspection'],
-    inspector: ['seed', 'planting', 'pesticide', 'inspection'],
-    warehouse_manager: ['inspection', 'processing', 'inventory'],
-    salesperson: ['inspection', 'processing', 'inventory', 'sales'],
+    farmer: ['seed', 'planting', 'pesticide', 'inspection', 'processing', 'inventory', 'sales'],
+    inspector: ['seed', 'planting', 'pesticide', 'inspection', 'processing', 'inventory', 'sales'],
+    warehouse_manager: ['seed', 'planting', 'pesticide', 'inspection', 'processing', 'inventory', 'sales'],
+    salesperson: ['seed', 'planting', 'pesticide', 'inspection', 'processing', 'inventory', 'sales'],
   };
 
   const visibleStages = roleStages[userRole || 'admin'] || roleStages.admin;
@@ -148,8 +149,9 @@ export function TraceQuery() {
     }
   };
 
-  const handleSearch = async () => {
-    if (!batchCode.trim()) {
+  const handleSearch = async (codeOverride?: string) => {
+    const searchCode = codeOverride || batchCode;
+    if (!searchCode.trim()) {
       setError('请输入批次编号');
       return;
     }
@@ -158,7 +160,7 @@ export function TraceQuery() {
     setError('');
 
     try {
-      const endpoint = userRole ? `/sales/trace/${batchCode.trim()}` : `/sales/public/trace/${batchCode.trim()}`;
+      const endpoint = userRole ? `/sales/trace/${searchCode.trim()}` : `/sales/public/trace/${searchCode.trim()}`;
       const res = await api.get(endpoint);
       setTraceData(res.data);
     } catch (err: any) {
@@ -169,6 +171,14 @@ export function TraceQuery() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const urlBatch = searchParams.get('batch');
+    if (urlBatch) {
+      setBatchCode(urlBatch);
+      handleSearch(urlBatch);
+    }
+  }, [searchParams]);
 
   const downloadTracePdf = async () => {
     if (!batchCode.trim() || !traceData) return;
