@@ -164,37 +164,42 @@ async def create_batch(
     db.add(batch)
     db.commit()
     db.refresh(batch)
-    
-    data_hash = calculate_hash(data.dict())
-    
-    blockchain_result = add_record_to_blockchain(
-        record_type="seed_registration",
-        batch_id=data.batch_code,
-        seed_batch_id=data.batch_code,
-        data_hash=data_hash,
-        uploader_type=current_user.organization_type or "user",
-    )
-    
-    if blockchain_result.get("success", False):
-        batch.is_on_chain = True
-        batch.blockchain_hash = blockchain_result.get("block_hash")
-        db.commit()
-        
-        blockchain_record = BlockchainRecord(
+
+    blockchain_result = {"success": False, "message": "Blockchain upload skipped"}
+    try:
+        data_hash = calculate_hash(data.dict())
+
+        blockchain_result = add_record_to_blockchain(
+            record_type="seed_registration",
             batch_id=data.batch_code,
             seed_batch_id=data.batch_code,
-            data_type="seed_registration",
             data_hash=data_hash,
-            blockchain_hash=blockchain_result.get("block_hash"),
-            transaction_hash=blockchain_result.get("transaction_hash"),
-            block_number=blockchain_result.get("block_number"),
-            is_on_chain=True,
-            uploaded_by=current_user.id,
-            uploaded_at=datetime.now()
+            uploader_type=current_user.organization_type or "user",
         )
-        db.add(blockchain_record)
-        db.commit()
-    
+
+        if blockchain_result.get("success", False):
+            batch.is_on_chain = True
+            batch.blockchain_hash = blockchain_result.get("block_hash")
+
+            blockchain_record = BlockchainRecord(
+                batch_id=data.batch_code,
+                seed_batch_id=data.batch_code,
+                data_type="seed_registration",
+                data_hash=data_hash,
+                blockchain_hash=blockchain_result.get("block_hash"),
+                transaction_hash=blockchain_result.get("transaction_hash"),
+                block_number=blockchain_result.get("block_number"),
+                is_on_chain=True,
+                uploaded_by=current_user.id,
+                uploaded_at=datetime.now()
+            )
+            db.add(blockchain_record)
+            db.commit()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("Blockchain upload failed for batch %s", data.batch_code, exc_info=True)
+        db.rollback()
+
     return {"status": "success", "data": batch, "blockchain": blockchain_result}
 
 

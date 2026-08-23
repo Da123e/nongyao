@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.core.database import Base
@@ -53,6 +53,7 @@ class Permission(Base):
 
 class UserRole(Base):
     __tablename__ = "user_roles"
+    __table_args__ = (UniqueConstraint('user_id', 'role_id', name='_user_role_uc'),)
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
@@ -65,6 +66,7 @@ class UserRole(Base):
 
 class RolePermission(Base):
     __tablename__ = "role_permissions"
+    __table_args__ = (UniqueConstraint('role_id', 'permission_id', name='_role_permission_uc'),)
 
     id = Column(Integer, primary_key=True, index=True)
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=False, index=True)

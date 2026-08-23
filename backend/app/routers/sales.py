@@ -240,13 +240,13 @@ async def add_logistics(
     
     logistics = LogisticsTracking(order_id=order_id, **logistics_data.dict())
     db.add(logistics)
-    db.commit()
-    db.refresh(logistics)
-    
+
     order.status = "shipped"
     order.updated_at = datetime.now()
+
     db.commit()
-    
+    db.refresh(logistics)
+
     return {"message": "Logistics tracking added successfully", "logistics_id": logistics.id}
 
 
