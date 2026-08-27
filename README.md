@@ -120,8 +120,8 @@ flowchart TB
         A1[👑 admin<br>系统管理员]
         A2[🌾 farmer<br>种植户]
         A3[🔬 inspector<br>质检员]
-        A4[📦 warehouse_manager<br>仓储常务管理员]
-        A5[💰 salesperson<br>售货员]
+        A4[📦 warehouse_manager<br>仓库管理员]
+        A5[💰 salesperson<br>销售人员]
     end
     class A1,A2,A3,A4,A5 role
 
@@ -135,18 +135,18 @@ flowchart TB
 
     subgraph 前端展示层 [🖥️ 前端展示层  React 19 + TypeScript + Vite + Tailwind CSS]
         direction TB
-        F1[🏠 Dashboard<br>角色自适应首页<br>WS 实时环境卡 + 30 秒统计兜底轮询<br>角色专属工作流卡片]
+        F1[🏠 Dashboard<br>首页 环境卡片 5 秒自动刷新<br>统计 + 通知中心]
         F2[📦 InventoryManage<br>库存管理]
         F3[💰 SalesManage<br>销售管理]
         F4[🌱 SeedTrace · PlantingManage<br>种子溯源 + 种植管理]
         F5[🌿 PesticideManage<br>农药管理]
         F6[📋 InspectionReport<br>检测报告 PDF 电子签名]
         F7[🏭 ProcessingManage<br>加工生产]
-        F8[📡 SensorDataEntry<br>传感器三模式录入<br>独立 WS 实时更新 + 主动离线<br>Modbus RTU 8 项土壤参数]
+        F8[📡 SensorDataEntry<br>传感器三模式录入<br>Modbus RTU 8 项土壤参数]
         F9[🔍 TraceQuery<br>全链路溯源 · 二维码 · 链验证]
         F_Core{{核心组件<br>Layout · ProtectedRoute · BatchChainView<br>SensorTrendChart · StatCard · ErrorBoundary}}
         F_Auth{{权限中心<br>RBAC 5 角色 · resolveUserRole 唯一来源<br>roles.ts · auth.ts 共享函数}}
-        F_WS[📡 SensorContext<br>WebSocket 实时推送 + 主动离线 markOffline]
+        F_WS[📡 SensorContext<br>WebSocket 实时推送]
         F_HW[🔌 Web Serial API<br>硬件连接 · CH340 RS485]
     end
     class F1,F2,F3,F4,F5,F6,F7,F8,F9 fePage
@@ -166,7 +166,7 @@ flowchart TB
 
     subgraph 后端服务层 [⚙️ 后端服务层  FastAPI + SQLAlchemy 2.0 + Pydantic]
         direction TB
-        B1[🔐 认证路由 · /api/auth<br>login · seed-data · users/me<br>主题/通知偏好持久化]
+        B1[🔐 认证路由 · /api/auth<br>login · seed-data · users/me]
         B2[🌱 种子区块链 · /api/blockchain/seed<br>批次生成 · SHA256哈希 · ECDSA签名 · 上链]
         B3[🌾 种植 · /api/planting<br>地块 + 种植记录 + 农事 + 环境数据]
         B4[🌿 农药 · /api/pesticide<br>农药库 + 采购 + 施用「上链」]
@@ -174,10 +174,10 @@ flowchart TB
         B6[🏭 加工 · /api/processing<br>批次「上链」+ 工艺 + 成品质检]
         B7[📦 库存 · /api/inventory<br>仓库 + 出入库 + 阈值预警通知]
         B8[💰 销售 · /api/sales<br>客户 + 订单「上链」+ 物流状态机]
-        B9[📡 传感器 · /api/measurements · /api/sensors<br>数据入库 · markOffline 主动离线<br>latest-environmental · 当日 avg/min/max]
+        B9[📡 传感器 · /api/measurements<br>数据入库 · latest-environmental · 当日 avg/min/max]
         B10[🔍 溯源聚合 · /api/sales/trace_by_batch<br>9 模块聚合 + 链上哈希校验]
         B11[🔔 通知中心 · /api/notifications<br>用户通知 CRUD · 未读计数 · 全部已读]
-        B_WS[⚡ WebSocket /api/ws<br>传感器实时数据广播<br>首页 + 传感器页双路独立连接]
+        B_WS[⚡ WebSocket /api/ws<br>传感器实时数据广播]
         B_Helper{{notifications_helper.py<br>订单 报告 种子 库存 农药 · 5 场景自动推送}}
         B_Auth{{auth.py 中间件<br>bcrypt 哈希 · JWT 签发 · require_permission<br>RBAC 权限点校验}}
         B_Migrate{{自动列迁移<br>environmental_data 6 土壤参数列自动补齐}}
@@ -249,11 +249,11 @@ sequenceDiagram
     BE->>BC: addRecord 种植
     BE->>DB: 写入 planting_record
 
-    loop 5 秒周期采集 传感器三模式
+    loop 3 秒周期采集 传感器三模式
         F->>FE: 选地块 → 硬件/模拟/手动录入
         FE->>BE: POST /api/measurements/data plot_code=P001
         BE->>DB: INSERT measurement + environmental_data
-        BE->>BE: WS 广播 → 首页+传感器页实时刷新 · 12 秒兜底轮询
+        BE->>BE: WS 广播 → 首页环境卡片 5 秒刷新
     end
 
     Note over F,DB: 阶段 3：农药施用「上链点 ③」+ 农残检测
