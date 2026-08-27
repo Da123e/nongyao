@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Foreig
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.core.database import Base
+from app.core.timezone import now_cn_default
 
 
 class Warehouse(Base):
@@ -17,8 +18,8 @@ class Warehouse(Base):
     humidity_range = Column(String(50))
     manager = Column(String(50))
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
+    updated_at = Column(DateTime, default=now_cn_default, onupdate=now_cn_default)
 
     inventory_items = relationship("InventoryItem", back_populates="warehouse")
 
@@ -42,12 +43,13 @@ class InventoryItem(Base):
     max_stock = Column(Float)
     expiry_date = Column(DateTime)
     storage_location = Column(String(100))
+    traceability_qr_code = Column(Text)
     status = Column(String(20), default="in_stock", index=True)
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
     is_on_chain = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
+    updated_at = Column(DateTime, default=now_cn_default, onupdate=now_cn_default)
 
     warehouse = relationship("Warehouse", back_populates="inventory_items")
 
@@ -62,7 +64,7 @@ class InventoryTransaction(Base):
     unit = Column(String(20))
     unit_price = Column(Float)
     total_amount = Column(Float)
-    transaction_date = Column(DateTime, default=datetime.now, index=True)
+    transaction_date = Column(DateTime, default=now_cn_default, index=True)
     operator = Column(String(50))
     source_document = Column(String(50))
     source_document_no = Column(String(50))
@@ -70,7 +72,7 @@ class InventoryTransaction(Base):
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
     is_on_chain = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
 
 
 class StorageRecord(Base):
@@ -88,11 +90,11 @@ class StorageRecord(Base):
     unit = Column(String(20))
     temperature = Column(Float)
     humidity = Column(Float)
-    record_time = Column(DateTime, default=datetime.now, index=True)
+    record_time = Column(DateTime, default=now_cn_default, index=True)
     operator = Column(String(50))
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
     is_on_chain = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
 
     warehouse = relationship("Warehouse")

@@ -19,6 +19,7 @@ from app.models.blockchain import BlockchainRecord, IPFSFile
 from app.models.auth import User, Role
 from app.auth import get_current_active_user, require_permission
 from datetime import datetime
+from app.core.timezone import now_cn_naive
 import json
 
 router = APIRouter()
@@ -33,8 +34,9 @@ def get_data_signature(db: Session, user_id: int, data_hash: str) -> Optional[st
     if user and user.private_key:
         try:
             return sign_data(data_hash, user.private_key)
-        except:
-            pass
+        except Exception as e:
+            logging.warning("数据签名失败 user_id=%s: %s", user_id, e)
+            return None
 
     return None
 
@@ -88,8 +90,10 @@ async def check_ipfs_status():
 @router.post("/ipfs/pin")
 async def pin_ipfs_file(
     request: Request,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
+    await require_permission("sensors:manage", current_user, db)
     data = await request.json()
     ipfs_hash = data.get("ipfs_hash")
     
@@ -158,7 +162,7 @@ async def register_seed_batch(
             block_number=result.get('block_number'),
             is_on_chain=True,
             uploaded_by=current_user.id,
-            uploaded_at=datetime.now()
+            uploaded_at=now_cn_naive()
         )
         db.add(blockchain_record)
         db.commit()
@@ -234,7 +238,7 @@ async def record_planting_data(
             block_number=result.get('block_number'),
             is_on_chain=True,
             uploaded_by=current_user.id,
-            uploaded_at=datetime.now()
+            uploaded_at=now_cn_naive()
         )
         db.add(blockchain_record)
         db.commit()
@@ -297,7 +301,7 @@ async def record_pesticide_application(
             block_number=result.get('block_number'),
             is_on_chain=True,
             uploaded_by=current_user.id,
-            uploaded_at=datetime.now()
+            uploaded_at=now_cn_naive()
         )
         db.add(blockchain_record)
         db.commit()
@@ -364,7 +368,7 @@ async def record_residue_test(
             block_number=result.get('block_number'),
             is_on_chain=True,
             uploaded_by=current_user.id,
-            uploaded_at=datetime.now()
+            uploaded_at=now_cn_naive()
         )
         db.add(blockchain_record)
         db.commit()
@@ -430,7 +434,7 @@ async def record_harvest(
             block_number=result.get('block_number'),
             is_on_chain=True,
             uploaded_by=current_user.id,
-            uploaded_at=datetime.now()
+            uploaded_at=now_cn_naive()
         )
         db.add(blockchain_record)
         db.commit()
@@ -496,7 +500,7 @@ async def record_processing_batch(
             block_number=result.get('block_number'),
             is_on_chain=True,
             uploaded_by=current_user.id,
-            uploaded_at=datetime.now()
+            uploaded_at=now_cn_naive()
         )
         db.add(blockchain_record)
         db.commit()
@@ -560,7 +564,7 @@ async def record_product_test(
             block_number=result.get('block_number'),
             is_on_chain=True,
             uploaded_by=current_user.id,
-            uploaded_at=datetime.now()
+            uploaded_at=now_cn_naive()
         )
         db.add(blockchain_record)
         db.commit()
@@ -621,7 +625,7 @@ async def record_storage(
             block_number=result.get('block_number'),
             is_on_chain=True,
             uploaded_by=current_user.id,
-            uploaded_at=datetime.now()
+            uploaded_at=now_cn_naive()
         )
         db.add(blockchain_record)
         db.commit()
@@ -681,7 +685,7 @@ async def record_logistics(
             block_number=result.get('block_number'),
             is_on_chain=True,
             uploaded_by=current_user.id,
-            uploaded_at=datetime.now()
+            uploaded_at=now_cn_naive()
         )
         db.add(blockchain_record)
         db.commit()
@@ -743,7 +747,7 @@ async def record_sales(
             block_number=result.get('block_number'),
             is_on_chain=True,
             uploaded_by=current_user.id,
-            uploaded_at=datetime.now()
+            uploaded_at=now_cn_naive()
         )
         db.add(blockchain_record)
         db.commit()
@@ -772,14 +776,22 @@ async def generate_qrcode_endpoint(
     if not batch_id or not seed_batch_id:
         raise HTTPException(status_code=400, detail="缺少批次号参数")
 
-    qrcode_data = generate_trace_qrcode(batch_id, seed_batch_id)
+    # 反向代理/直连场景：优先 X-Forwarded-*，回退到 request.url
+    forwarded_scheme = request.headers.get("X-Forwarded-Proto") or request.url.scheme
+    forwarded_host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host")
+    # 前端传自己的 window.location.origin 最准（手机扫码可直达）
+    url_prefix = (data.get("url_prefix") or "").strip() or None
+    mode = data.get("mode") if data.get("mode") in ("public", "admin") else "public"
 
-    return {
-        "batch_id": batch_id,
-        "seed_batch_id": seed_batch_id,
-        "qrcode": qrcode_data,
-        "trace_url": f"{settings.FRONTEND_URL}/trace?batch={seed_batch_id}"
-    }
+    qr_result = generate_trace_qrcode(
+        batch_id,
+        seed_batch_id,
+        url_prefix=url_prefix,
+        request_host=forwarded_host,
+        request_scheme=forwarded_scheme,
+        mode=mode,
+    )
+    return qr_result
 
 
 @router.get("/trace/{seed_batch_code}")

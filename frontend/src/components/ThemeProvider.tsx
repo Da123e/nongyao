@@ -12,23 +12,27 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<Theme>(() => {
-    const saved = localStorage.getItem('theme');
-    return (saved as Theme) || 'system';
+    return (localStorage.getItem('theme') as Theme) || 'light';
   });
 
   useEffect(() => {
-    const applyTheme = () => {
-      let themeToApply = theme;
-      if (theme === 'system') {
-        themeToApply = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-      }
-      document.documentElement.classList.remove('dark');
-      if (themeToApply === 'dark') {
-        document.documentElement.classList.add('dark');
+    let applied = theme;
+    if (theme === 'system') {
+      applied = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    document.documentElement.classList.remove('dark');
+    if (applied === 'dark') {
+      document.documentElement.classList.add('dark');
+    }
+    localStorage.setItem('theme', theme);
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'theme' && e.newValue) {
+        setTheme(e.newValue as Theme);
       }
     };
-    applyTheme();
-    localStorage.setItem('theme', theme);
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
   }, [theme]);
 
   return (

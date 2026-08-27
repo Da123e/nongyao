@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Foreig
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.core.database import Base
+from app.core.timezone import now_cn_default
 
 
 class Plot(Base):
@@ -20,8 +21,8 @@ class Plot(Base):
     base_name = Column(String(100))
     public_key = Column(Text)
     status = Column(String(20), default="available", index=True)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
+    updated_at = Column(DateTime, default=now_cn_default, onupdate=now_cn_default)
 
     planting_records = relationship("PlantingRecord", back_populates="plot")
     environmental_data = relationship("EnvironmentalData", back_populates="plot")
@@ -35,7 +36,7 @@ class PlantingRecord(Base):
     plot_id = Column(Integer, ForeignKey("plots.id"), nullable=False, index=True)
     batch_id = Column(Integer, ForeignKey("seed_batches.id"), nullable=False, index=True)
     seed_batch_code = Column(String(50), nullable=False, index=True)
-    planting_date = Column(DateTime, default=datetime.now, index=True)
+    planting_date = Column(DateTime, default=now_cn_default, index=True)
     expected_harvest_date = Column(DateTime)
     planting_density = Column(Float)
     quantity_planted = Column(Float)
@@ -44,8 +45,8 @@ class PlantingRecord(Base):
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
     is_on_chain = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
+    updated_at = Column(DateTime, default=now_cn_default, onupdate=now_cn_default)
 
     plot = relationship("Plot", back_populates="planting_records")
     seed_batch = relationship("SeedBatch", back_populates="planting_records")
@@ -57,7 +58,7 @@ class EnvironmentalData(Base):
     id = Column(Integer, primary_key=True, index=True)
     plot_id = Column(Integer, ForeignKey("plots.id"), nullable=False, index=True)
     seed_batch_code = Column(String(50), index=True)
-    record_time = Column(DateTime, default=datetime.now, index=True)
+    record_time = Column(DateTime, default=now_cn_default, index=True)
 
     __table_args__ = (
         PrimaryKeyConstraint('id'),
@@ -77,7 +78,7 @@ class EnvironmentalData(Base):
     salinity = Column(Float)           # 盐分 mg/kg
     data_source = Column(String(50))
     blockchain_hash = Column(String(64), index=True)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
 
     plot = relationship("Plot", back_populates="environmental_data")
 
@@ -89,7 +90,7 @@ class FarmingActivity(Base):
     plot_id = Column(Integer, ForeignKey("plots.id"), nullable=False, index=True)
     seed_batch_code = Column(String(50), index=True)
     activity_type = Column(String(50), nullable=False, index=True)
-    activity_date = Column(DateTime, default=datetime.now, index=True)
+    activity_date = Column(DateTime, default=now_cn_default, index=True)
     
     __table_args__ = (
         Index('idx_activity_plot_batch', 'plot_id', 'seed_batch_code'),
@@ -102,7 +103,7 @@ class FarmingActivity(Base):
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
     is_on_chain = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
 
     plot = relationship("Plot", back_populates="farming_activities")
     worker = relationship("FarmWorker")
@@ -118,8 +119,8 @@ class FarmWorker(Base):
     phone = Column(String(20))
     role = Column(String(50))
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
+    updated_at = Column(DateTime, default=now_cn_default, onupdate=now_cn_default)
 
 
 class FarmEquipment(Base):
@@ -133,8 +134,8 @@ class FarmEquipment(Base):
     status = Column(String(20), default="available", index=True)
     operator = Column(String(50))
     maintenance_date = Column(DateTime)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
+    updated_at = Column(DateTime, default=now_cn_default, onupdate=now_cn_default)
 
 
 class HarvestRecord(Base):
@@ -144,7 +145,7 @@ class HarvestRecord(Base):
     harvest_code = Column(String(50), unique=True, index=True, nullable=False)
     seed_batch_code = Column(String(50), nullable=False, index=True)
     plot_id = Column(Integer, ForeignKey("plots.id"), nullable=False, index=True)
-    harvest_date = Column(DateTime, default=datetime.now, index=True)
+    harvest_date = Column(DateTime, default=now_cn_default, index=True)
     harvest_quantity = Column(Float)
     sorting_result = Column(String(200))
     quality_level = Column(String(20))
@@ -152,7 +153,7 @@ class HarvestRecord(Base):
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
     is_on_chain = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
+    updated_at = Column(DateTime, default=now_cn_default, onupdate=now_cn_default)
 
     plot = relationship("Plot")

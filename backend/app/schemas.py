@@ -77,20 +77,26 @@ class MeasurementItem(BaseModel):
     name: str = Field(..., description="检测项目名称")
     value: float = Field(..., description="检测值")
     unit: str = Field(default="mg/kg", description="单位")
+    # 数据来源标记（前端区分模拟/硬件：SIMULATED / MANUAL_HARDWARE / HARDWARE_RS485）
+    source_hint: Optional[str] = Field(default=None, description="数据来源标记，用于前端显示模拟/硬件徽标")
 
 class MeasurementCreate(BaseModel):
     device_id: str = Field(..., description="设备ID")
     items: List[MeasurementItem] = Field(..., description="检测项目列表")
+    # 整包数据来源：优先级低于 item.source_hint；若 item 未传则用整包值
+    source_hint: Optional[str] = Field(default=None, description="整包数据来源标记（SIMULATED/MANUAL_HARDWARE/HARDWARE_RS485）")
 
 class MeasurementResponse(BaseModel):
     id: int
     sensor_id: int
     seed_batch_code: Optional[str]
+    plot_code: Optional[str]
     timestamp: datetime
     item_name: str
     value: float
     unit: str
     is_over_limit: bool
+    source_hint: Optional[str]
     raw_data: Optional[str]
 
     class Config:
@@ -166,7 +172,9 @@ class InventoryTransactionCreate(BaseModel):
     transaction_type: str = Field(..., description="交易类型(in/out)")
     quantity: float = Field(..., description="数量")
     unit_price: Optional[float] = Field(None, description="单价")
-    description: Optional[str] = Field(None, description="描述")
+    unit: Optional[str] = Field(None, description="单位")
+    remarks: Optional[str] = Field(None, description="备注")
+    source_document: Optional[str] = Field(None, description="单据编号")
     operator: Optional[str] = Field(None, description="操作员")
 
 class CustomerCreate(BaseModel):
@@ -190,6 +198,17 @@ class OrderCreate(BaseModel):
     shipping_address: Optional[str] = Field(None, description="收货地址")
     shipping_method: Optional[str] = Field(None, description="配送方式")
     remarks: Optional[str] = Field(None, description="备注")
+
+class OrderItemCreate(BaseModel):
+    item_code: Optional[str] = Field(None, description="商品编码")
+    item_name: str = Field(..., description="商品名称")
+    batch_code: Optional[str] = Field(None, description="加工批次编码")
+    seed_batch_code: Optional[str] = Field(None, description="种子批次编码")
+    processing_batch_id: Optional[int] = Field(None, description="加工批次ID")
+    quantity: float = Field(..., description="数量")
+    unit: str = Field(..., description="单位")
+    unit_price: Optional[float] = Field(None, description="单价")
+    product_grade: Optional[str] = Field(None, description="产品等级")
 
 class LogisticsCreate(BaseModel):
     tracking_no: str = Field(..., description="运单号")
@@ -231,6 +250,17 @@ class ProcessingBatchCreate(BaseModel):
     raw_material_unit: Optional[str] = Field(None, description="原料单位")
     product_name: Optional[str] = Field(None, description="产品名称")
     product_grade: Optional[str] = Field(None, description="产品等级")
+    processing_date: Optional[datetime] = Field(None, description="加工日期")
+    output_quantity: Optional[float] = Field(None, description="产量")
+    output_unit: Optional[str] = Field("kg", description="产量单位")
+    status: Optional[str] = Field("processing", description="状态")
+
+class ProcessingBatchStatusUpdate(BaseModel):
+    status: str = Field(..., description="目标状态: processing/completed/cancelled")
+    warehouse_id: Optional[int] = Field(None, description="目标仓库ID (completed时可选)")
+    unit_price: Optional[float] = Field(0, description="单价 (completed时可选)")
+    min_stock: Optional[float] = Field(0, description="最低库存 (completed时可选)")
+    max_stock: Optional[float] = Field(None, description="最高库存 (completed时可选)")
 
 class InspectionReportCreate(BaseModel):
     report_code: str = Field(..., description="报告编号")

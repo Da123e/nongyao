@@ -1,9 +1,12 @@
 import hashlib
 import os
 import requests
+import logging
 from typing import Optional, Dict, Any
 import json
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 IPFS_API_URL = settings.IPFS_API_URL
 IPFS_GATEWAY = settings.IPFS_GATEWAY
@@ -87,7 +90,8 @@ def get_json_data(ipfs_hash: str) -> Optional[Dict[str, Any]]:
 
     try:
         return json.loads(file_content.decode('utf-8'))
-    except:
+    except Exception as e:
+        logger.warning("get_json_data IPFS JSON 解析失败: %s", e)
         return None
 
 

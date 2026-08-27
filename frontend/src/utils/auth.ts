@@ -67,7 +67,7 @@ export const getCurrentRole = (): UserRole => {
   return 'consumer';
 };
 
-export const canViewSection = (section: string, role: UserRole): boolean => {
+export const canViewSection = (section: string, _role: UserRole): boolean => {
   const allSections = ['seed', 'planting', 'pesticide', 'processing', 'inspection', 'inventory', 'sales'];
   return allSections.includes(section);
 };

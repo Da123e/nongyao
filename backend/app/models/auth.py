@@ -1,7 +1,8 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text, UniqueConstraint, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.core.database import Base
+from app.core.timezone import now_cn_default
 
 
 class User(Base):
@@ -20,10 +21,12 @@ class User(Base):
     organization_type = Column(String(20))
     is_active = Column(Boolean, default=True)
     is_superuser = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    preferences = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=now_cn_default)
+    updated_at = Column(DateTime, default=now_cn_default, onupdate=now_cn_default)
 
     roles = relationship("UserRole", back_populates="user")
+    organization = relationship("Organization", foreign_keys=[organization_id], primaryjoin="User.organization_id==Organization.id")
 
 
 class Role(Base):
@@ -33,7 +36,7 @@ class Role(Base):
     name = Column(String(50), unique=True, index=True, nullable=False)
     description = Column(String(200))
     role_type = Column(String(20), index=True)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
 
     users = relationship("UserRole", back_populates="role")
     permissions = relationship("RolePermission", back_populates="role")
@@ -58,7 +61,7 @@ class UserRole(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
 
     user = relationship("User", back_populates="roles")
     role = relationship("Role", back_populates="users")
@@ -71,7 +74,7 @@ class RolePermission(Base):
     id = Column(Integer, primary_key=True, index=True)
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=False, index=True)
     permission_id = Column(Integer, ForeignKey("permissions.id"), nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
 
     role = relationship("Role", back_populates="permissions")
     permission = relationship("Permission", back_populates="roles")
@@ -89,8 +92,8 @@ class Organization(Base):
     address = Column(String(200))
     public_key = Column(Text)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
+    updated_at = Column(DateTime, default=now_cn_default, onupdate=now_cn_default)
 
 
 class Certificate(Base):
@@ -111,8 +114,8 @@ class Certificate(Base):
     valid_until = Column(DateTime, nullable=False)
     revoked_at = Column(DateTime)
     reason = Column(String(200))
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
+    updated_at = Column(DateTime, default=now_cn_default, onupdate=now_cn_default)
 
 
 class Notification(Base):
@@ -124,6 +127,6 @@ class Notification(Base):
     title = Column(String(100), nullable=False)
     message = Column(Text, nullable=False)
     read = Column(Boolean, default=False, index=True)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
 
     user = relationship("User")

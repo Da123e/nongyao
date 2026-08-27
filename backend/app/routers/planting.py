@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
+from app.core.timezone import now_cn_naive
 from typing import Optional
 import hashlib
 from app.core.database import get_db
@@ -81,15 +82,34 @@ async def create_planting_record(
     if not plot:
         raise HTTPException(status_code=404, detail="地块不存在")
     
+    if plot.status == "planted":
+        raise HTTPException(status_code=400, detail=f"地块 {plot.plot_code} 已被占用，当前状态为 {plot.status}，无法重复种植")
+    
+    active_record = db.query(PlantingRecord).filter(
+        PlantingRecord.plot_id == plot.id,
+        PlantingRecord.status == "growing"
+    ).first()
+    if active_record:
+        raise HTTPException(status_code=400, detail=f"地块 {plot.plot_code} 已有进行中的种植记录({active_record.seed_batch_code})，无法重复种植")
+    
     batch = db.query(SeedBatch).filter(SeedBatch.batch_code == data.seed_batch_code).first()
     if not batch:
         raise HTTPException(status_code=404, detail="种子批次不存在")
+
+    # 检查种子批次剩余量是否足够
+    planting_qty = float(data.quantity_planted or 0)
+    remaining = (batch.total_quantity or 0) - (batch.used_quantity or 0)
+    if planting_qty > remaining and batch.total_quantity:
+        raise HTTPException(
+            status_code=400,
+            detail=f"种子批次 {batch.batch_code} 剩余 {remaining}kg，不足以种植 {planting_qty}kg"
+        )
     
     record = PlantingRecord(
         plot_id=plot.id,
         batch_id=batch.id,
         seed_batch_code=batch.batch_code,
-        planting_date=data.planting_date or datetime.now(),
+        planting_date=data.planting_date or now_cn_naive(),
         expected_harvest_date=data.expected_harvest_date,
         planting_density=data.planting_density,
         quantity_planted=data.quantity_planted,
@@ -97,6 +117,15 @@ async def create_planting_record(
     )
     db.add(record)
     plot.status = "planted"
+
+    # 更新种子批次已用量
+    if planting_qty > 0:
+        batch.used_quantity = (batch.used_quantity or 0) + planting_qty
+        batch.updated_at = now_cn_naive()
+        remaining_after = (batch.total_quantity or 0) - (batch.used_quantity or 0)
+        if remaining_after <= 0 and batch.total_quantity:
+            batch.status = "depleted"
+    
     db.commit()
     db.refresh(record)
     
@@ -125,7 +154,7 @@ async def create_planting_record(
             block_number=blockchain_result.get("block_number"),
             is_on_chain=True,
             uploaded_by=current_user.id,
-            uploaded_at=datetime.now()
+            uploaded_at=now_cn_naive()
         )
         db.add(blockchain_record)
         db.commit()
@@ -227,7 +256,7 @@ async def get_environmental_data(
     if not plot:
         raise HTTPException(status_code=404, detail="地块不存在")
     
-    since = datetime.now() - timedelta(hours=hours)
+    since = now_cn_naive() - timedelta(hours=hours)
     query = db.query(EnvironmentalData).filter(
         EnvironmentalData.plot_id == plot.id,
         EnvironmentalData.record_time >= since,
@@ -263,12 +292,12 @@ async def create_farming_activity(
         plot_id=plot.id,
         seed_batch_code=data.seed_batch_code,
         activity_type=data.activity_type,
-        activity_date=data.activity_date or datetime.now(),
+        activity_date=data.activity_date or now_cn_naive(),
         description=data.description,
         worker_id=data.worker_id,
         equipment_id=data.equipment_id,
         notes=data.notes,
-        blockchain_hash=generate_hash(f"{data.plot_code}{data.activity_type}{datetime.now()}"),
+        blockchain_hash=generate_hash(f"{data.plot_code}{data.activity_type}{now_cn_naive()}"),
     )
     db.add(activity)
     db.commit()

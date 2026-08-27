@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
-import { api } from '../services/api';
+import { api, sensorApi } from '../services/api';
 
 interface MeasurementItem {
   name: string;
@@ -135,7 +135,32 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     sensorTypes: [],
   });
 
+  // ref 镜像 state，确保所有 useCallback 闭包中能读到最新 selectedSensor
+  const stateRef = useRef<SensorState>(state);
+  stateRef.current = state;
+
   const lastValuesRef = useRef<Record<string, number>>({});
+
+  // source_hint 使用同步 ref，避免 setState 批处理异步导致首包来源标记错误
+  //   'SIMULATED'        → startSimulation 成功进入
+  //   'MANUAL_HARDWARE'  → startHardware 成功进入
+  //   null               → 均未启动 / 已停止，退化为 MANUAL_ENTRY（后端兜底）
+  // 注意：ref 的写入必须和 setState 同步做，不能放到 useEffect，useEffect 仍然晚于同步调用的 startAutoSubmit()
+  const activeSourceHintRef = useRef<string | null>(null);
+
+  // ============ 硬件相关：useRef 持久化（避免 rerender 时句柄被重新赋值为 null 导致串口无法关闭）============
+  //   portRef:           Web Serial 的 SerialPort 对象
+  //   hardwarePollingTimer:  soil_multi 下每 3s 发 Modbus 查询的 setInterval id
+  //   hardwareRunningRef:   readLoop 循环开关（boolean，避免停止后 reader.read() 仍然继续）
+  //   readerRef / writerRef: Web Serial 的 readable/writable stream reader/writer 句柄（close 需要它们 cancel）
+  const portRef = useRef<any>(null);
+  const hardwarePollingTimerRef = useRef<number | null>(null);
+  const hardwareRunningRef = useRef<boolean>(false);
+  const readerRef = useRef<any>(null);
+  const writerRef = useRef<any>(null);
+  // 二进制 / ASCII 读取缓冲区（Web Serial read() 会把分片塞进来，必须持久化）
+  const modbusBufferRef = useRef<Uint8Array>(new Uint8Array(0));
+  const asciiBufferRef = useRef<string>('');
 
   const simulateReading = useCallback(() => {
     setState((prev) => {
@@ -171,14 +196,29 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         params.set('plot_code', currentState.plotCode);
       }
 
+      // ===== 数据来源标记：严格按当前运行状态区分，避免「真硬件/模拟」混淆 =====
+      //   优先读 activeSourceHintRef（同步变量），避免 React setState 异步批处理造成首包误判 MANUAL_ENTRY
+      //   兜底读 state 布尔值（兼容定时器后续触发时 state 已 flush 的场景，双保险）
+      let payloadSourceHint: string | null = activeSourceHintRef.current;
+      if (!payloadSourceHint) {
+        if (currentState.isSimulating) {
+          payloadSourceHint = 'SIMULATED';
+        } else if (currentState.isHardwareConnected) {
+          payloadSourceHint = 'MANUAL_HARDWARE';
+        }
+      }
+      const bodySource = payloadSourceHint;
+
       api.post(
         endpoint,
         {
           device_id: currentState.selectedSensor,
+          source_hint: bodySource,
           items: validItems.map((item) => ({
             name: item.name,
             value: parseFloat(item.value.toFixed(3)),
             unit: item.unit,
+            source_hint: (item as any).source_hint || bodySource,
           })),
         },
         { params: params.toString() ? params : undefined }
@@ -202,6 +242,9 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       lastValuesRef.current[item.name] = item.value || 25;
     });
 
+    // 同步写入 source_hint ref：必须在 setState 之前，保证后续同步调用能立即读到正确值
+    activeSourceHintRef.current = 'SIMULATED';
+
     setState({
       isSimulating: true,
       isAutoSubmitting: false,
@@ -222,7 +265,7 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       simulateReading();
       simulationInterval = window.setInterval(() => {
         simulateReading();
-      }, 3000);
+      }, 5000);
     }, 100);
   }, []);
 
@@ -236,6 +279,15 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       autoSubmitInterval = null;
     }
     lastValuesRef.current = {};
+    // 停止模拟：清理 source_hint ref，退化为 MANUAL_ENTRY
+    if (activeSourceHintRef.current === 'SIMULATED') {
+      activeSourceHintRef.current = null;
+    }
+    // 主动通知后端传感器离线，让状态立即更新（不等超时窗口）
+    const deviceId = stateRef.current.selectedSensor;
+    if (deviceId) {
+      sensorApi.markOffline(deviceId).catch(() => {});
+    }
     setState((prev) => ({ ...prev, isSimulating: false, isAutoSubmitting: false, isHardwareConnecting: false, items: [] }));
   }, []);
 
@@ -247,7 +299,7 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     submitData();
     autoSubmitInterval = window.setInterval(() => {
       submitData();
-    }, 3000);
+    }, 5000);
   }, [submitData]);
 
   const stopAutoSubmit = useCallback(() => {
@@ -255,12 +307,17 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       clearInterval(autoSubmitInterval);
       autoSubmitInterval = null;
     }
+    // 停止自动上传时，如果模拟/硬件也都已停止，才标记离线
+    // 如果用户只是暂停上传但保持模拟运行，传感器仍视为在线（数据流暂歇）
+    const deviceId = stateRef.current.selectedSensor;
+    if (deviceId) {
+      const st = stateRef.current;
+      if (!st.isSimulating && !st.isHardwareConnected) {
+        sensorApi.markOffline(deviceId).catch(() => {});
+      }
+    }
     setState((prev) => ({ ...prev, isAutoSubmitting: false }));
   }, []);
-
-  let portRef: any = null;
-  let hardwarePollingTimer: number | null = null;
-  let hardwareRunningRef = false;
 
   // =========== Modbus RTU 工具函数 ===========
   // CRC16 (Modbus) 校验
@@ -353,7 +410,7 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
   };
 
-  // =========== 旧的 ASCII 解析（兼容普通串口传感器） ===========
+  // =========== ASCII 解析（兼容普通串口传感器） ===========
   const parseAsciiHardwareData = (data: string, _sensorType: string, items: MeasurementItem[]): MeasurementItem[] => {
     const lines = data.trim().split('\n');
     const newItems = [...items];
@@ -377,12 +434,16 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const startHardware = useCallback((sensorId: string, sensorName: string, sensorType: string, items: MeasurementItem[], seedBatchCode: string, plotCode: string, autoReport: boolean, sensorTypes: SensorTypeInfo[]) => {
     if (simulationInterval) clearInterval(simulationInterval);
     if (autoSubmitInterval) clearInterval(autoSubmitInterval);
-    if (hardwarePollingTimer) {
-      clearInterval(hardwarePollingTimer);
-      hardwarePollingTimer = null;
+    if (hardwarePollingTimerRef.current) {
+      clearInterval(hardwarePollingTimerRef.current);
+      hardwarePollingTimerRef.current = null;
     }
-    hardwareRunningRef = false;
-    portRef = null;
+    hardwareRunningRef.current = false;
+    portRef.current = null;
+    readerRef.current = null;
+    writerRef.current = null;
+    modbusBufferRef.current = new Uint8Array(0);
+    asciiBufferRef.current = '';
 
     items.forEach((item) => {
       lastValuesRef.current[item.name] = item.value || 25;
@@ -415,14 +476,10 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
 
     const isSoilMulti = sensorType === 'soil_multi';
-    let reader: any = null;
-    let writer: any = null;
-    let readBuffer = new Uint8Array(0);
-    let asciiBuffer = '';
 
     (navigator as any).serial.requestPort()
       .then(async (p: any) => {
-        portRef = p;
+        portRef.current = p;
         await p.open({
           baudRate: 9600,
           dataBits: 8,
@@ -431,8 +488,8 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           flowControl: 'none',
         });
 
-        writer = p.writable?.getWriter();
-        reader = p.readable?.getReader();
+        writerRef.current = p.writable?.getWriter();
+        readerRef.current = p.readable?.getReader();
 
         setState((prev) => ({
           ...prev,
@@ -441,22 +498,26 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           isAutoSubmitting: true,
         }));
 
-        hardwareRunningRef = true;
+        hardwareRunningRef.current = true;
+        // 硬件串口打开成功 → 同步写入 source_hint ref = MANUAL_HARDWARE
+        activeSourceHintRef.current = 'MANUAL_HARDWARE';
 
         // 数据读取循环（一直读，存在 buffer 中，轮询定时器解析）
         const readLoop = async () => {
-          if (!reader) return;
+          if (!readerRef.current) return;
           try {
-            while (hardwareRunningRef) {
-              const { value, done } = await reader.read();
+            while (hardwareRunningRef.current) {
+              const { value, done } = await readerRef.current.read();
               if (done) break;
               if (!value) continue;
               if (isSoilMulti) {
                 // Modbus：把字节追加到二进制缓冲
-                const merged = new Uint8Array(readBuffer.length + value.length);
-                merged.set(readBuffer, 0);
-                merged.set(value, readBuffer.length);
-                readBuffer = merged;
+                const prevBuffer = modbusBufferRef.current;
+                const merged = new Uint8Array(prevBuffer.length + value.length);
+                merged.set(prevBuffer, 0);
+                merged.set(value, prevBuffer.length);
+                modbusBufferRef.current = merged;
+                let readBuffer = modbusBufferRef.current;
                 // 收到数据大于等于 21 字节，尝试从头解析一帧
                 while (readBuffer.length >= 21) {
                   // 找到 0x01 地址+0x03 功能码开头的位置
@@ -467,7 +528,7 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                   }
                   if (startIdx >= readBuffer.length - 20) {
                     // 没有完整帧可能，截断前面，保留末尾
-                    readBuffer = readBuffer.slice(startIdx);
+                    modbusBufferRef.current = readBuffer.slice(startIdx);
                     break;
                   }
                   const frame = readBuffer.slice(startIdx, startIdx + 21);
@@ -482,14 +543,17 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                   }
                   // 丢弃已解析部分
                   readBuffer = readBuffer.slice(startIdx + 21);
+                  modbusBufferRef.current = readBuffer;
                 }
               } else {
                 // ASCII 传感器：逐行解析
-                asciiBuffer += new TextDecoder().decode(value);
+                asciiBufferRef.current += new TextDecoder().decode(value);
+                let asciiBuffer = asciiBufferRef.current;
                 while (asciiBuffer.includes('\n')) {
                   const idx = asciiBuffer.indexOf('\n');
                   const line = asciiBuffer.slice(0, idx);
                   asciiBuffer = asciiBuffer.slice(idx + 1);
+                  asciiBufferRef.current = asciiBuffer;
                   if (line.trim()) {
                     setState((prev) => ({
                       ...prev,
@@ -502,7 +566,7 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             }
           } catch (error) {
             console.error('Hardware read loop error:', error);
-            if (hardwareRunningRef) {
+            if (hardwareRunningRef.current) {
               setState((prev) => ({
                 ...prev,
                 isHardwareConnected: false,
@@ -516,21 +580,21 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         // soil_multi：每 3 秒主动发送一次 Modbus 查询帧（RS485 是主从协议，必须问才答）
         if (isSoilMulti) {
           const queryFrame = buildModbusReadQuery(0x01, 0x0000, 0x0008);
-          hardwarePollingTimer = window.setInterval(async () => {
-            if (!writer || !hardwareRunningRef) return;
+          hardwarePollingTimerRef.current = window.setInterval(async () => {
+            if (!writerRef.current || !hardwareRunningRef.current) return;
             try {
-              await writer.write(queryFrame);
+              await writerRef.current.write(queryFrame);
             } catch (e) {
               console.warn('发送 Modbus 查询失败:', e);
             }
           }, 3000);
           // 立即发一次
-          if (writer) writer.write(queryFrame).catch(() => {});
+          if (writerRef.current) writerRef.current.write(queryFrame).catch(() => {});
         }
       })
       .catch((error: unknown) => {
         console.error('Hardware connection error:', error);
-        hardwareRunningRef = false;
+        hardwareRunningRef.current = false;
         setState((prev) => ({
           ...prev,
           isHardwareConnecting: false,
@@ -543,10 +607,10 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, [submitData]);
 
   const stopHardware = useCallback(() => {
-    hardwareRunningRef = false;
-    if (hardwarePollingTimer) {
-      clearInterval(hardwarePollingTimer);
-      hardwarePollingTimer = null;
+    hardwareRunningRef.current = false;
+    if (hardwarePollingTimerRef.current) {
+      clearInterval(hardwarePollingTimerRef.current);
+      hardwarePollingTimerRef.current = null;
     }
     if (simulationInterval) {
       clearInterval(simulationInterval);
@@ -556,12 +620,28 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       clearInterval(autoSubmitInterval);
       autoSubmitInterval = null;
     }
+    // 先 cancel reader/writer，避免 Web Serial 正在挂起 read() 直接 close() 报错
+    try { readerRef.current?.cancel?.().catch(() => {}); } catch {}
+    try { writerRef.current?.close?.().catch(() => {}); } catch {}
+    readerRef.current = null;
+    writerRef.current = null;
     // 尝试关闭串口
     try {
-      (portRef as any)?.close?.().catch(() => {});
+      portRef.current?.close?.().catch(() => {});
     } catch {}
-    portRef = null;
+    portRef.current = null;
+    modbusBufferRef.current = new Uint8Array(0);
+    asciiBufferRef.current = '';
     lastValuesRef.current = {};
+    // 停止硬件：清理 MANUAL_HARDWARE source_hint
+    if (activeSourceHintRef.current === 'MANUAL_HARDWARE') {
+      activeSourceHintRef.current = null;
+    }
+    // 主动通知后端传感器离线
+    const deviceId = stateRef.current.selectedSensor;
+    if (deviceId) {
+      sensorApi.markOffline(deviceId).catch(() => {});
+    }
     setState((prev) => ({ ...prev, isHardwareConnected: false, isHardwareConnecting: false, isAutoSubmitting: false }));
   }, []);
 
@@ -630,6 +710,17 @@ export const SensorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         clearInterval(autoSubmitInterval);
         autoSubmitInterval = null;
       }
+      if (hardwarePollingTimerRef.current) {
+        clearInterval(hardwarePollingTimerRef.current);
+        hardwarePollingTimerRef.current = null;
+      }
+      hardwareRunningRef.current = false;
+      try { readerRef.current?.cancel?.().catch(() => {}); } catch {}
+      try { writerRef.current?.close?.().catch(() => {}); } catch {}
+      readerRef.current = null;
+      writerRef.current = null;
+      try { portRef.current?.close?.().catch(() => {}); } catch {}
+      portRef.current = null;
       lastValuesRef.current = {};
     };
   }, []);

@@ -1,17 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
-import { useState, useEffect, useCallback } from 'react';
-import { Dashboard } from './pages/Dashboard';
-import { SeedTrace } from './pages/SeedTrace';
-import { PlantingManage } from './pages/PlantingManage';
-import { PesticideManage } from './pages/PesticideManage';
-import { InspectionReport } from './pages/InspectionReport';
-import { ProcessingManage } from './pages/ProcessingManage';
-import { InventoryManage } from './pages/InventoryManage';
-import { SalesManage } from './pages/SalesManage';
-import { TraceQuery } from './pages/TraceQuery';
-import { SensorDataEntry } from './pages/SensorDataEntry';
-
-import { Login } from './pages/Login';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { Layout } from './components/Layout';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ProtectedRoute } from './components/ProtectedRoute';
@@ -20,15 +8,33 @@ import { SensorProvider } from './context/SensorContext';
 import { api, authApi } from './services/api';
 import { resolveUserRole } from './utils/auth';
 
+const PageFallback = () => (
+  <div className="flex items-center justify-center h-screen">
+    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
+  </div>
+);
+
+const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })));
+const SeedTrace = lazy(() => import('./pages/SeedTrace').then(m => ({ default: m.SeedTrace })));
+const PlantingManage = lazy(() => import('./pages/PlantingManage').then(m => ({ default: m.PlantingManage })));
+const PesticideManage = lazy(() => import('./pages/PesticideManage').then(m => ({ default: m.PesticideManage })));
+const InspectionReport = lazy(() => import('./pages/InspectionReport').then(m => ({ default: m.InspectionReport })));
+const ProcessingManage = lazy(() => import('./pages/ProcessingManage').then(m => ({ default: m.ProcessingManage })));
+const InventoryManage = lazy(() => import('./pages/InventoryManage').then(m => ({ default: m.InventoryManage })));
+const SalesManage = lazy(() => import('./pages/SalesManage').then(m => ({ default: m.SalesManage })));
+const TraceQuery = lazy(() => import('./pages/TraceQuery').then(m => ({ default: m.TraceQuery })));
+const SensorDataEntry = lazy(() => import('./pages/SensorDataEntry').then(m => ({ default: m.SensorDataEntry })));
+const Login = lazy(() => import('./pages/Login').then(m => ({ default: m.Login })));
+
 const routePermissions: Record<string, string[]> = {
   '/': ['admin', 'farmer', 'inspector', 'warehouse_manager', 'salesperson'],
-  '/seed': ['admin', 'farmer'],
+  '/seed': ['admin', 'farmer', 'inspector', 'warehouse_manager', 'salesperson'],
   '/planting': ['admin', 'farmer'],
   '/pesticide': ['admin', 'farmer'],
-  '/inspection': ['admin', 'inspector'],
+  '/inspection': ['admin', 'farmer', 'inspector'],
   '/processing': ['admin', 'warehouse_manager'],
   '/inventory': ['admin', 'warehouse_manager'],
-  '/sales': ['admin', 'salesperson'],
+  '/sales': ['admin', 'warehouse_manager', 'salesperson'],
   '/trace': ['admin', 'farmer', 'inspector', 'warehouse_manager', 'salesperson'],
   '/sensor': ['admin', 'farmer', 'inspector', 'warehouse_manager', 'salesperson'],
 };
@@ -124,18 +130,39 @@ function AppContent() {
   }
 
   return (
+    <Suspense fallback={<PageFallback />}>
     <Routes>
       <Route path="/login" element={isLoggedIn ? <Navigate to="/" /> : <Login onLogin={handleLogin} />} />
 
-      {/* 消费者公开溯源入口：无需登录即可扫码查询 */}
+      {/* ===== 公开入口（不登录也能访问、不带管理员侧栏） ===== */}
+      {/* 消费者扫码溯源端：/trace/public?batch=PB2026-001 */}
+      <Route
+        path="/trace/public"
+        element={
+          <ErrorBoundary>
+            <TraceQuery publicMode />
+          </ErrorBoundary>
+        }
+      />
+
+      {/* 未登录态访问 /trace：走公开模式（允许用户直接链接分享） */}
       {!isLoggedIn && (
-        <Route path="/trace" element={<ErrorBoundary><TraceQuery /></ErrorBoundary>} />
+        <Route
+          path="/trace"
+          element={
+            <ErrorBoundary>
+              <TraceQuery publicMode />
+            </ErrorBoundary>
+          }
+        />
       )}
 
       <Route path="/" element={isLoggedIn ? <Layout onLogout={handleLogout} /> : <Navigate to="/login" />}>
         <Route index element={
           <ProtectedRoute allowedRoles={routePermissions['/']} userRole={userRole}>
-            <ErrorBoundary><Dashboard /></ErrorBoundary>
+            {userRole === 'warehouse_manager' ? <Navigate to="/inventory" replace /> :
+             userRole === 'salesperson' ? <Navigate to="/sales" replace /> :
+             <ErrorBoundary><Dashboard /></ErrorBoundary>}
           </ProtectedRoute>
         } />
         <Route path="seed" element={
@@ -185,8 +212,9 @@ function AppContent() {
         } />
       </Route>
 
-      <Route path="*" element={<Navigate to="/trace" replace />} />
+      <Route path="*" element={<Navigate to={isLoggedIn ? '/' : '/login'} replace />} />
     </Routes>
+    </Suspense>
   );
 }
 

@@ -59,6 +59,8 @@ export function BatchChainView({ batchCode, onClose }: BatchChainViewProps) {
   });
   const [blockchainStatus, setBlockchainStatus] = useState<any>(null);
   const [photos, setPhotos] = useState<any[]>([]);
+  const [photosError, setPhotosError] = useState<string | null>(null);
+  const [blockchainError, setBlockchainError] = useState<string | null>(null);
   const [chainValidity, setChainValidity] = useState<{ valid: boolean | null; details?: any }>({ valid: null });
   
   const currentRole = getCurrentRole();
@@ -83,9 +85,15 @@ export function BatchChainView({ batchCode, onClose }: BatchChainViewProps) {
 
   const fetchChainData = async () => {
     if (!batchCode) return;
+    const cleanCode = String(batchCode).trim();
+    if (!cleanCode) {
+      setLoading(false);
+      setChainData(null);
+      return;
+    }
     setLoading(true);
     try {
-      const chainRes = await seedApi.getBatchFullChain(batchCode);
+      const chainRes = await seedApi.getBatchFullChain(cleanCode);
       
       if (chainRes && chainRes.data && chainRes.data.data) {
         setChainData(chainRes.data.data);
@@ -94,13 +102,20 @@ export function BatchChainView({ batchCode, onClose }: BatchChainViewProps) {
         return;
       }
 
-      api.get(`/measurements/photos/${batchCode}`).then(res => {
+      api.get(`/measurements/photos/${cleanCode}`).then(res => {
         if (res.data && res.data.data) {
           setPhotos(res.data.data);
+          setPhotosError(null);
         }
-      }).catch(() => {});
+      }).catch((err) => {
+        const msg = err?.response?.status === 404
+          ? '暂无记录照片'
+          : `照片加载失败：${err?.message || '未知错误'}`;
+        setPhotosError(msg);
+        setPhotos([]);
+      });
 
-      api.get(`/blockchain/verify/${batchCode}`).then(res => {
+      api.get(`/blockchain/verify/${cleanCode}`).then(res => {
         if (res.data) {
           const isSuccess = res.data.success !== false;
           if (isSuccess) {
@@ -125,9 +140,14 @@ export function BatchChainView({ batchCode, onClose }: BatchChainViewProps) {
       api.get('/blockchain/connection/status').then(res => {
         if (res.data) {
           setBlockchainStatus(res.data);
+          setBlockchainError(null);
         }
-      }).catch(() => {});
+      }).catch((err) => {
+        setBlockchainError(`区块链状态获取失败：${err?.message || '未知错误'}`);
+        setBlockchainStatus(null);
+      });
     } catch (err) {
+      // 404 由 axios 拦截器按 URL 规则静默，这里也只写入空态，不弹 alert
       console.error('Failed to fetch batch chain data:', err);
       setChainData(null);
     } finally {
@@ -961,6 +981,24 @@ export function BatchChainView({ batchCode, onClose }: BatchChainViewProps) {
                     </div>
                   </div>
                 </>
+              )}
+
+              {photosError && photos.length === 0 && (
+                <div className="relative pl-8 mt-2">
+                  <div className="w-full bg-yellow-50 border border-yellow-200 rounded-xl p-3 flex items-center gap-2">
+                    <Image className="w-4 h-4 text-yellow-500" />
+                    <span className="text-xs text-yellow-700">{photosError}</span>
+                  </div>
+                </div>
+              )}
+
+              {blockchainError && !blockchainStatus && (
+                <div className="relative pl-8 mt-2">
+                  <div className="w-full bg-yellow-50 border border-yellow-200 rounded-xl p-3 flex items-center gap-2">
+                    <Database className="w-4 h-4 text-yellow-500" />
+                    <span className="text-xs text-yellow-700">{blockchainError}</span>
+                  </div>
+                </div>
               )}
             </div>
           </div>

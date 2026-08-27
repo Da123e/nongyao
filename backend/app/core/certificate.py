@@ -2,7 +2,7 @@ import hashlib
 import json
 import ctypes
 import ctypes.wintypes
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Tuple
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend
@@ -100,8 +100,10 @@ def verify_certificate_with_system_root(cert_pem: str) -> Dict[str, Any]:
             if root_fingerprint:
                 pass
         
-        now = datetime.now()
-        is_valid = cert.not_valid_before <= now <= cert.not_valid_after
+        # cryptography 生成 X509 证书的 not_valid_before/after 是 UTC-naive datetime,必须以 UTC 此刻对比
+        # 使用 Asia/Shanghai local now 对比会造成 ±8h 的系统性错判
+        now_utc_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        is_valid = cert.not_valid_before <= now_utc_naive <= cert.not_valid_after
         
         return {
             "valid": is_valid,

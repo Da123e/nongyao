@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Foreig
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.core.database import Base
+from app.core.timezone import now_cn_default
 
 
 class InspectionReport(Base):
@@ -15,7 +16,7 @@ class InspectionReport(Base):
     processing_batch_id = Column(Integer, ForeignKey("processing_batches.id"), index=True)
     plot_id = Column(Integer, ForeignKey("plots.id"), index=True)
     report_type = Column(String(20), nullable=False, index=True)
-    report_date = Column(DateTime, default=datetime.now, index=True)
+    report_date = Column(DateTime, default=now_cn_default, index=True)
     test_items = Column(Text)
     test_results = Column(Text)
     inspector = Column(String(50))
@@ -28,7 +29,7 @@ class InspectionReport(Base):
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
     is_on_chain = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
 
 
 class PesticideResidueTest(Base):
@@ -43,4 +44,4 @@ class PesticideResidueTest(Base):
     is_over_limit = Column(Boolean, default=False, index=True)
     is_qualified = Column(Boolean)
     test_method = Column(String(100))
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)

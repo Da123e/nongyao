@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Plus,
   Search,
@@ -33,9 +34,14 @@ import {
   Ruler,
   Sun,
   Flame,
+  Download,
+  Printer,
+  Link as LinkIcon,
 } from 'lucide-react';
 import { api, seedApi, blockchainApi } from '../services/api';
 import type { SeedSupplier, SeedBatch, SeedQualityTest, BatchFullChainData } from '../types/index.ts';
+import { canManageSeed } from '../utils/roles';
+import { formatDateCn } from '../utils/date';
 
 interface BatchChainStatus {
   has_planting: boolean;
@@ -83,6 +89,9 @@ export function SeedTrace() {
   const [fullChainData, setFullChainData] = useState<BatchFullChainData | null>(null);
   const [chainLoading, setChainLoading] = useState(false);
   const [qrcodeData, setQrcodeData] = useState<string>('');
+  const [qrcodeUrl, setQrcodeUrl] = useState<string>('');
+  const [copied, setCopied] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const fetchChainStatus = useCallback(async (batchList: SeedBatch[]) => {
     const statusMap: Record<string, BatchChainStatus> = {};
@@ -173,6 +182,22 @@ export function SeedTrace() {
     setShowModal(true);
   };
 
+  // 从首页快捷卡跳转带 ?action=xxx 参数时自动打开对应弹窗
+  useEffect(() => {
+    const action = searchParams.get('action');
+    if (action === 'new') {
+      setActiveTab('batches');
+      setModalType('batch');
+      setFormData({});
+      setShowModal(true);
+    }
+    if (action) {
+      searchParams.delete('action');
+      setSearchParams(searchParams, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -208,14 +233,72 @@ export function SeedTrace() {
       const qrRes = await blockchainApi.generateQrcode({
         batch_id: batch.id,
         seed_batch_id: batch.batch_code,
+        url_prefix: window.location.origin,
       });
       if (qrRes.data && qrRes.data.qrcode) {
         setQrcodeData(qrRes.data.qrcode);
+        setQrcodeUrl(qrRes.data.trace_url || '');
+      } else {
+        setQrcodeUrl('');
       }
     } catch (err) {
       console.error('Failed to fetch quality tests:', err);
       setQualityTests([]);
     }
+  };
+
+  const handleDownloadQrcode = () => {
+    if (!qrcodeData) return;
+    const link = document.createElement('a');
+    link.href = qrcodeData;
+    link.download = `溯源二维码_${selectedBatch?.batch_code || ''}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handlePrintQrcode = () => {
+    if (!qrcodeData) return;
+    const w = window.open('', '_blank', 'width=400,height=520');
+    if (!w) return;
+    w.document.write(`
+      <html><head><title>溯源贴纸 - ${selectedBatch?.batch_code || ''}</title>
+      <style>
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; text-align: center; padding: 24px; }
+        .brand { font-size: 16px; font-weight: bold; color: #047857; }
+        img { width: 200px; height: 200px; margin: 12px 0; }
+        .batch { font-size: 13px; color: #374151; margin-top: 6px; }
+        .hint { font-size: 11px; color: #9ca3af; margin-top: 8px; }
+      </style></head>
+      <body>
+        <div class="brand">金生链 · 花生全产业链溯源</div>
+        <img src="${qrcodeData}" alt="溯源二维码" />
+        <div class="batch">批次编号: ${selectedBatch?.batch_code || ''}</div>
+        ${selectedBatch?.variety_name ? `<div class="batch">${selectedBatch.variety_name}</div>` : ''}
+        <div class="hint">手机扫码可查看该批次全链条溯源信息</div>
+      </body></html>
+    `);
+    w.document.close();
+    w.focus();
+    w.print();
+  };
+
+  const handleCopyQrcodeLink = async () => {
+    if (!qrcodeUrl) return;
+    try {
+      await navigator.clipboard.writeText(qrcodeUrl);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = qrcodeUrl;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch { /* ignore */ }
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const handleViewSupplier = (supplier: SeedSupplier) => {
@@ -336,13 +419,15 @@ export function SeedTrace() {
                 className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-green-500 focus:border-transparent"
               />
             </div>
-            <button
-              onClick={handleCreate}
-              className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              添加
-            </button>
+            {canManageSeed() && (
+              <button
+                onClick={handleCreate}
+                className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                添加
+              </button>
+            )}
           </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -391,19 +476,23 @@ export function SeedTrace() {
                   <button onClick={() => handleViewSupplier(supplier)} className="text-gray-400 hover:text-blue-500 p-2" title="查看详情">
                     <Eye className="w-4 h-4" />
                   </button>
-                  <button onClick={() => handleEditSupplier(supplier)} className="text-gray-400 hover:text-blue-500 p-2" title="编辑">
-                    <Edit className="w-4 h-4" />
-                  </button>
-                  <button 
-                    onClick={() => handleToggleSupplierStatus(supplier)} 
-                    className={`p-2 ${supplier.is_active ? 'text-gray-400 hover:text-orange-500' : 'text-gray-400 hover:text-green-500'}`} 
-                    title={supplier.is_active ? '停用' : '启用'}
-                  >
-                    {supplier.is_active ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-                  </button>
-                  <button onClick={() => handleDeleteSupplier(supplier)} className="text-gray-400 hover:text-red-500 p-2" title="删除">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  {canManageSeed() && (
+                    <>
+                      <button onClick={() => handleEditSupplier(supplier)} className="text-gray-400 hover:text-blue-500 p-2" title="编辑">
+                        <Edit className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleToggleSupplierStatus(supplier)}
+                        className={`p-2 ${supplier.is_active ? 'text-gray-400 hover:text-orange-500' : 'text-gray-400 hover:text-green-500'}`}
+                        title={supplier.is_active ? '停用' : '启用'}
+                      >
+                        {supplier.is_active ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                      </button>
+                      <button onClick={() => handleDeleteSupplier(supplier)} className="text-gray-400 hover:text-red-500 p-2" title="删除">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             ))
@@ -766,7 +855,7 @@ export function SeedTrace() {
                                       {fullChainData.planting.plots?.[String(record.plot_id)]?.name || fullChainData.planting.plots?.[record.plot_id]?.name || '未知地块'}
                                     </p>
                                     <p className="text-xs text-gray-500">
-                                      种植日期: {new Date(record.planting_date).toLocaleDateString()} | 种植量: {record.quantity_planted} kg
+                                      种植日期: {formatDateCn(record.planting_date)} | 种植量: {record.quantity_planted} kg
                                     </p>
                                   </div>
                                   <span className={`text-xs px-2 py-1 rounded ${
@@ -840,7 +929,7 @@ export function SeedTrace() {
                               <div key={app.id} className="bg-white rounded-lg p-3">
                                 <div className="flex items-center justify-between mb-1">
                                   <span className="text-sm font-medium text-gray-800">{pesticide?.name || '未知农药'}</span>
-                                  <span className="text-xs text-gray-500">{new Date(app.application_date).toLocaleDateString()}</span>
+                                  <span className="text-xs text-gray-500">{formatDateCn(app.application_date)}</span>
                                 </div>
                                 <div className="flex items-center gap-4 text-xs text-gray-500">
                                   <span>用量: {app.dosage} {app.unit}</span>
@@ -882,7 +971,7 @@ export function SeedTrace() {
                               <div className="flex items-center gap-4 text-xs text-gray-500">
                                 <span>{report.report_type}</span>
                                 <span>{report.inspection_agency}</span>
-                                <span>{new Date(report.report_date).toLocaleDateString()}</span>
+                                <span>{formatDateCn(report.report_date)}</span>
                               </div>
                             </div>
                           ))
@@ -1212,8 +1301,8 @@ export function SeedTrace() {
                 <Package className="w-4 h-4" />
                 溯源二维码
               </h4>
-              <div className="flex items-center gap-6">
-                <div className="p-4 bg-gray-50 rounded-lg">
+              <div className="flex items-start gap-6">
+                <div className="p-4 bg-gray-50 rounded-lg shrink-0">
                   {qrcodeData ? (
                     <img src={qrcodeData} alt="溯源二维码" className="w-32 h-32" />
                   ) : (
@@ -1222,10 +1311,42 @@ export function SeedTrace() {
                     </div>
                   )}
                 </div>
-                <div>
+                <div className="flex-1 min-w-0">
                   <p className="text-sm text-gray-500 mb-2">扫码溯源</p>
                   <p className="text-xs text-gray-400">使用手机扫码可查看该批次的全链条溯源信息</p>
                   <p className="text-xs text-gray-400 mt-1">批次编号: {selectedBatch?.batch_code}</p>
+                  {qrcodeUrl && (
+                    <p className="text-xs text-gray-400 mt-1 break-all">扫码链接: {qrcodeUrl}</p>
+                  )}
+                  {qrcodeData && (
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <button
+                        type="button"
+                        onClick={handleDownloadQrcode}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        下载 PNG
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handlePrintQrcode}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition"
+                      >
+                        <Printer className="w-3.5 h-3.5" />
+                        打印贴纸
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCopyQrcodeLink}
+                        disabled={!qrcodeUrl}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <LinkIcon className="w-3.5 h-3.5" />
+                        {copied ? '已复制' : '复制链接'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

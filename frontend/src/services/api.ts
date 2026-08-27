@@ -5,7 +5,7 @@ import type {
   MeasurementListResponse,
   DailySummaryResponse,
   LatestEnvironmentalRecord,
-} from '../types/index.ts';
+} from '../types';
 
 const api = axios.create({
   baseURL: '/api',
@@ -59,11 +59,21 @@ api.interceptors.response.use(
       alert(`服务器内部错误：${message}`);
     } else if (error.response?.status === 403) {
       console.warn('Permission denied for:', error.response.config.url);
-      alert('权限不足，无法执行此操作');
+      // GET 请求的 403 静默处理（页面加载时可选数据源失败不应弹窗打断用户）
+      // 只有 POST/PUT/DELETE 等主动操作失败才弹窗提醒
+      const method = (error.response.config?.method || 'get').toLowerCase();
+      if (method !== 'get') {
+        alert('权限不足，无法执行此操作');
+      }
     } else if (error.response?.status === 404) {
       console.error('Not Found:', error.response.data);
       const message = getErrorMessage(error.response.data);
-      alert(message);
+      // 某些查询接口（如批次全链条溯源）内部已在组件层处理 404 空态，不应弹原生 alert
+      const silentOnNotFound = error.response.config?.silentOnNotFound
+        || (error.response.config?.url && /\/full-chain$|\/public\/trace\//.test(error.response.config.url));
+      if (!silentOnNotFound) {
+        alert(message);
+      }
     } else if (error.response?.status === 422) {
       console.error('Validation Error:', error.response.data);
       const message = getErrorMessage(error.response.data);
@@ -87,6 +97,20 @@ export const authApi = {
     api.put('/auth/users/me', data),
   changePassword: (data: { old_password: string; new_password: string }) =>
     api.post('/auth/users/me/change-password', data),
+  listUsers: (params?: { keyword?: string; role?: string; organization_id?: number }) =>
+    api.get('/auth/users', { params }),
+  createUser: (data: { username: string; password: string; real_name?: string; email?: string; phone?: string; role: string; organization_id?: number }) =>
+    api.post('/auth/users', data),
+  updateUser: (id: number, data: any) =>
+    api.put(`/auth/users/${id}`, data),
+  deleteUser: (id: number) =>
+    api.delete(`/auth/users/${id}`),
+  getUser: (id: number) =>
+    api.get(`/auth/users/${id}`),
+  getPreferences: () =>
+    api.get('/auth/users/me/preferences'),
+  updatePreferences: (data: Record<string, any>) =>
+    api.put('/auth/users/me/preferences', data),
 };
 
 export const seedApi = {
@@ -128,6 +152,7 @@ export const processingApi = {
   getBatch: (batchCode: string) => api.get(`/processing/batches/${batchCode}`),
   getRecords: (params?: any) => api.get('/processing/records', { params }),
   createRecord: (data: any) => api.post('/processing/records', data),
+  updateBatchStatus: (batchCode: string, data: any) => api.patch(`/processing/batches/${batchCode}/status`, data),
 };
 
 export const inventoryApi = {
@@ -146,9 +171,40 @@ export const salesApi = {
   getOrders: (params?: any) => api.get('/sales/orders', { params }),
   createOrder: (data: any) => api.post('/sales/orders', data),
   getOrderDetail: (orderId: number) => api.get(`/sales/orders/${orderId}`),
+  addOrderItem: (orderId: number, data: {
+    item_code?: string;
+    item_name: string;
+    batch_code?: string;
+    seed_batch_code?: string;
+    processing_batch_id?: number;
+    quantity: number;
+    unit: string;
+    unit_price?: number;
+    product_grade?: string;
+  }) => api.post(`/sales/orders/${orderId}/items`, data),
   updateOrderStatus: (orderId: number, status: string) => api.put(`/sales/orders/${orderId}/status`, { status }),
   addLogistics: (orderId: number, data: any) => api.post(`/sales/orders/${orderId}/logistics`, data),
   updateLogistics: (logisticsId: number, data: any) => api.put(`/sales/logistics/${logisticsId}`, data),
+  getLogisticsList: (params?: { tracking_no?: string; carrier?: string; status?: string; order_id?: number }) =>
+    api.get('/sales/logistics', { params }),
+};
+
+export const organizationsApi = {
+  list: (params?: { keyword?: string; type?: string }) => api.get('/organizations', { params }),
+  create: (data: { org_code: string; name: string; type?: string; contact_name?: string; phone?: string; address?: string }) =>
+    api.post('/organizations', data),
+  get: (orgId: number) => api.get(`/organizations/${orgId}`),
+  update: (orgId: number, data: Partial<{ name: string; type: string; contact_name: string; phone: string; address: string; is_active: boolean }>) =>
+    api.put(`/organizations/${orgId}`, data),
+  delete: (orgId: number) => api.delete(`/organizations/${orgId}`),
+  exportCsv: () => api.get('/organizations/export', { responseType: 'blob' }),
+  importCsv: (file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return api.post('/organizations/import', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
 };
 
 export const blockchainApi = {
@@ -182,6 +238,7 @@ export const sensorApi = {
     api.put<Sensor>(`/sensors/${deviceId}`, data),
   delete: (deviceId: string) => api.delete(`/sensors/${deviceId}`),
   getTypes: () => api.get('/sensors/types'),
+  markOffline: (deviceId: string) => api.post(`/sensors/${deviceId}/offline`),
 };
 
 export const measurementApi = {
@@ -193,14 +250,31 @@ export const measurementApi = {
     api.get<{ status: string; count: number; data: LatestEnvironmentalRecord[] }>(
       '/measurements/latest-environmental'
     ),
-  getBySensor: (deviceId: string, limit?: number, seedBatchCode?: string, date?: string) =>
+  getBySensor: (deviceId: string, limit?: number, seedBatchCode?: string, date?: string, plotCode?: string) =>
     api.get<MeasurementListResponse>(`/measurements/sensor/${deviceId}`, {
-      params: { limit, seed_batch_code: seedBatchCode, date },
+      params: { limit, seed_batch_code: seedBatchCode, date, plot_code: plotCode },
     }),
-  getDailySummary: (deviceId: string, date: string, seedBatchCode?: string) =>
+  getDailySummary: (deviceId: string, date: string, seedBatchCode?: string, plotCode?: string) =>
     api.get<DailySummaryResponse>('/measurements/daily-summary', {
-      params: { device_id: deviceId, date, seed_batch_code: seedBatchCode },
+      params: { device_id: deviceId, date, seed_batch_code: seedBatchCode, plot_code: plotCode },
     }),
+  getDashboardEnvironment: () =>
+    api.get<{
+      status: string;
+      schema: Array<{ key: string; label: string; unit: string; min_ok: number; max_ok: number }>;
+      count: number;
+      plots: any[];
+    }>('/measurements/dashboard-environment', { silentOnNotFound: true } as any),
+  getPlotHistory: (plotCode: string, hours: number = 24) =>
+    api.get<{
+      status: string;
+      plot_code: string;
+      plot_name: string;
+      count: number;
+      hours: number;
+      timestamps: string[];
+      series: Record<string, { label: string; unit: string; points: Array<{ t: string; v: number }> }>;
+    }>(`/measurements/plot/${plotCode}/history`, { params: { hours } }),
 };
 
 export const notificationApi = {
@@ -214,7 +288,8 @@ export const statisticsApi = {
 };
 
 export const operationsApi = {
-  getRecentOperations: (limit?: number) => api.get('/operations/recent', { params: { limit } }),
+  getRecentOperations: (params?: { page?: number; page_size?: number }) =>
+    api.get('/operations/recent', { params }),
 };
 
 export { api };

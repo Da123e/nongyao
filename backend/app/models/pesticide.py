@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Foreig
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.core.database import Base
+from app.core.timezone import now_cn_default
 
 
 class Pesticide(Base):
@@ -20,8 +21,8 @@ class Pesticide(Base):
     usage_instructions = Column(Text)
     storage_requirements = Column(String(200))
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
+    updated_at = Column(DateTime, default=now_cn_default, onupdate=now_cn_default)
 
     purchases = relationship("PesticidePurchase", back_populates="pesticide")
     applications = relationship("PesticideApplication", back_populates="pesticide")
@@ -33,7 +34,7 @@ class PesticidePurchase(Base):
     id = Column(Integer, primary_key=True, index=True)
     pesticide_id = Column(Integer, ForeignKey("pesticides.id"), nullable=False, index=True)
     supplier_name = Column(String(100), index=True)
-    purchase_date = Column(DateTime, default=datetime.now, index=True)
+    purchase_date = Column(DateTime, default=now_cn_default, index=True)
     quantity = Column(Float)
     unit = Column(String(20))
     unit_price = Column(Float)
@@ -45,7 +46,7 @@ class PesticidePurchase(Base):
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
     is_on_chain = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
 
     pesticide = relationship("Pesticide", back_populates="purchases")
 
@@ -57,7 +58,7 @@ class PesticideApplication(Base):
     plot_id = Column(Integer, ForeignKey("plots.id"), nullable=False, index=True)
     pesticide_id = Column(Integer, ForeignKey("pesticides.id"), nullable=False, index=True)
     seed_batch_code = Column(String(50), index=True)
-    application_date = Column(DateTime, default=datetime.now, index=True)
+    application_date = Column(DateTime, default=now_cn_default, index=True)
     dosage = Column(Float)
     unit = Column(String(20))
     dilution_ratio = Column(String(50))
@@ -69,7 +70,7 @@ class PesticideApplication(Base):
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
     is_on_chain = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
 
     pesticide = relationship("Pesticide", back_populates="applications")
 
@@ -80,7 +81,7 @@ class FieldResidueTest(Base):
     id = Column(Integer, primary_key=True, index=True)
     seed_batch_code = Column(String(50), nullable=False, index=True)
     plot_id = Column(Integer, ForeignKey("plots.id"), nullable=False, index=True)
-    test_date = Column(DateTime, default=datetime.now, index=True)
+    test_date = Column(DateTime, default=now_cn_default, index=True)
     test_item = Column(String(100), nullable=False, index=True)
     limit_value = Column(Float)
     measured_value = Column(Float)
@@ -92,6 +93,6 @@ class FieldResidueTest(Base):
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
     is_on_chain = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
 
     plot = relationship("Plot")

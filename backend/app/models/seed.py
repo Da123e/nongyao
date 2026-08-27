@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Foreig
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.core.database import Base
+from app.core.timezone import now_cn_default
 
 
 class SeedSupplier(Base):
@@ -16,8 +17,8 @@ class SeedSupplier(Base):
     credit_rating = Column(String(20))
     public_key = Column(Text)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
+    updated_at = Column(DateTime, default=now_cn_default, onupdate=now_cn_default)
 
     batches = relationship("SeedBatch", back_populates="supplier")
 
@@ -32,6 +33,8 @@ class SeedBatch(Base):
     breeding_base = Column(String(200))
     production_date = Column(DateTime)
     net_weight = Column(Float)
+    total_quantity = Column(Float)
+    used_quantity = Column(Float, default=0)
     germination_rate = Column(Float)
     purity = Column(Float)
     moisture_content = Column(Float)
@@ -44,8 +47,12 @@ class SeedBatch(Base):
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
     is_on_chain = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
+    updated_at = Column(DateTime, default=now_cn_default, onupdate=now_cn_default)
+
+    @property
+    def remaining_quantity(self):
+        return (self.total_quantity or 0) - (self.used_quantity or 0)
 
     supplier = relationship("SeedSupplier", back_populates="batches")
     quality_tests = relationship("SeedQualityTest", back_populates="batch")
@@ -57,7 +64,7 @@ class SeedQualityTest(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     batch_id = Column(Integer, ForeignKey("seed_batches.id"), nullable=False, index=True)
-    test_date = Column(DateTime, default=datetime.now, index=True)
+    test_date = Column(DateTime, default=now_cn_default, index=True)
     test_item = Column(String(100), nullable=False, index=True)
     test_value = Column(Float)
     standard_value = Column(Float)
@@ -67,6 +74,6 @@ class SeedQualityTest(Base):
     third_party_certificate = Column(String(255))
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
 
     batch = relationship("SeedBatch", back_populates="quality_tests")

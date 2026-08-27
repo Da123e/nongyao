@@ -2,7 +2,10 @@ from web3 import Web3
 import json
 import hashlib
 import time
+import logging
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.backends import default_backend
@@ -22,7 +25,8 @@ DEFAULT_PRIVATE_KEY = settings.GANACHE_PRIVATE_KEY
 def is_connected() -> bool:
     try:
         return w3.is_connected()
-    except:
+    except Exception as e:
+        logger.warning("is_connected 调用失败: %s", e)
         return False
 
 
@@ -31,7 +35,8 @@ def has_contract() -> bool:
         with open(CONTRACT_ADDRESS_FILE, "r") as f:
             addr = f.read().strip()
         return addr and len(addr) > 0
-    except:
+    except Exception as e:
+        logger.warning("读取合约地址文件失败: %s", e)
         return False
 
 
@@ -78,7 +83,8 @@ def verify_signature(data: str, signature_hex: str, public_key_pem: str) -> bool
     try:
         public_key.verify(signature, data_bytes, ec.ECDSA(hashes.SHA256()))
         return True
-    except:
+    except Exception as e:
+        logger.warning("verify_signature 验签失败: %s", e)
         return False
 
 
@@ -96,7 +102,8 @@ def generate_new_batch_id(prefix: str = "SB") -> str:
     timestamp = time.strftime("%Y%m%d")
     try:
         count = w3.eth.get_transaction_count(DEFAULT_ACCOUNT)
-    except:
+    except Exception as e:
+        logger.warning("get_transaction_count 调用失败,使用时间戳 fallback: %s", e)
         count = int(time.time() * 1000) % 100000
     return f"{prefix}{timestamp}{str(count).zfill(5)}"
 

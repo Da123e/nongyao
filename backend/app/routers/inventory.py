@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List
 import logging
 from app.core.database import get_db
@@ -19,22 +20,26 @@ async def get_warehouses(
 ):
     await require_permission("inventory:query", current_user, db)
     warehouses = db.query(Warehouse).all()
-    return [
-        {
+    result = []
+    for w in warehouses:
+        used = db.query(
+            func.coalesce(func.sum(InventoryItem.quantity), 0)
+        ).filter(InventoryItem.warehouse_id == w.id).scalar() or 0
+        result.append({
             "id": w.id,
             "warehouse_code": w.warehouse_code,
             "name": w.name,
             "location": w.location,
             "type": w.type,
             "capacity": w.capacity,
+            "used_capacity": used,
             "temperature_range": w.temperature_range,
             "humidity_range": w.humidity_range,
             "manager": w.manager,
             "is_active": w.is_active,
             "created_at": w.created_at.isoformat() if w.created_at else None,
-        }
-        for w in warehouses
-    ]
+        })
+    return result
 
 
 @router.post("/warehouses")
@@ -78,10 +83,14 @@ async def get_inventory(
         query = query.filter(InventoryItem.seed_batch_code == seed_batch_code)
     
     items = query.all()
-    return [
-        {
+    result = []
+    for item in items:
+        warehouse = db.query(Warehouse).filter(Warehouse.id == item.warehouse_id).first()
+        result.append({
             "id": item.id,
             "warehouse_id": item.warehouse_id,
+            "warehouse_name": warehouse.name if warehouse else None,
+            "warehouse_location": warehouse.location if warehouse else None,
             "item_code": item.item_code,
             "item_name": item.item_name,
             "item_type": item.item_type,
@@ -95,21 +104,49 @@ async def get_inventory(
             "min_stock": item.min_stock,
             "max_stock": item.max_stock,
             "expiry_date": item.expiry_date.isoformat() if item.expiry_date else None,
+            "storage_location": item.storage_location,
+            "traceability_qr_code": item.traceability_qr_code,
             "status": item.status,
-        }
-        for item in items
-    ]
+        })
+    return result
 
 
 @router.post("/inventory")
 async def create_inventory_item(
     item_data: InventoryItemCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
     await require_permission("inventory:manage", current_user, db)
     
     item = InventoryItem(**item_data.dict())
+
+    warehouse = db.query(Warehouse).filter(Warehouse.id == item_data.warehouse_id).first()
+    if warehouse:
+        item.warehouse_name = warehouse.name
+        item.warehouse_location = warehouse.location
+
+    if item.unit_price is None:
+        item.unit_price = 0
+    if item.total_value is None and item.quantity is not None:
+        item.total_value = round(item.quantity * (item.unit_price or 0), 2)
+
+    try:
+        from app.core.qrcode_generator import generate_trace_qrcode
+        forwarded_scheme = request.headers.get("X-Forwarded-Proto") or request.url.scheme
+        forwarded_host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host")
+        qr_result = generate_trace_qrcode(
+            item.item_code,
+            item.seed_batch_code or item.batch_code or item.item_code,
+            request_host=forwarded_host,
+            request_scheme=forwarded_scheme,
+            mode='public',
+        )
+        item.traceability_qr_code = qr_result.get('qrcode')
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"QR code generation failed for inventory item: {e}")
+
     db.add(item)
     db.commit()
     db.refresh(item)
@@ -131,19 +168,61 @@ async def add_transaction(
         raise HTTPException(status_code=404, detail="Inventory item not found")
     
     operator = current_user.real_name or current_user.username
-    transaction_dict = transaction_data.dict()
+    transaction_dict = transaction_data.dict(exclude_unset=True)
     transaction_dict["operator"] = operator
-    transaction = InventoryTransaction(item_id=item_id, **transaction_dict)
+    transaction_dict["total_amount"] = (transaction_dict.get("quantity") or 0) * (transaction_dict.get("unit_price") or 0)
+
+    tx_item_data = {
+        "item_id": item_id,
+        "transaction_type": transaction_dict.get("transaction_type"),
+        "quantity": transaction_dict.get("quantity"),
+        "unit": transaction_dict.get("unit"),
+        "unit_price": transaction_dict.get("unit_price"),
+        "total_amount": transaction_dict["total_amount"],
+        "operator": transaction_dict["operator"],
+        "source_document": transaction_dict.get("source_document"),
+        "remarks": transaction_dict.get("remarks"),
+    }
+    transaction = InventoryTransaction(**tx_item_data)
     db.add(transaction)
     
     if transaction_dict["transaction_type"] == "in":
-        item.quantity += transaction_dict["quantity"]
+        warehouse = db.query(Warehouse).filter(Warehouse.id == item.warehouse_id).first()
+        if warehouse and warehouse.capacity:
+            current_total = db.query(
+                func.coalesce(func.sum(InventoryItem.quantity), 0)
+            ).filter(InventoryItem.warehouse_id == item.warehouse_id).scalar()
+            new_total = (current_total or 0) + transaction_dict["quantity"]
+            if new_total > warehouse.capacity:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"入库失败：仓库 {warehouse.name} 容量上限为 {warehouse.capacity}，当前总库存将达到 {new_total}"
+                )
+        if item.max_stock and (item.quantity + transaction_dict["quantity"]) > item.max_stock:
+            raise HTTPException(
+                status_code=400,
+                detail=f"入库失败：入库后库存将达到 {item.quantity + transaction_dict['quantity']}kg，超过最高库存 {item.max_stock}kg"
+            )
+        old_qty = item.quantity or 0
+        old_price = item.unit_price or 0
+        tx_qty = transaction_dict["quantity"]
+        tx_price = transaction_dict.get("unit_price")
+        item.quantity = old_qty + tx_qty
+        if tx_price is not None:
+            old_total_value = old_qty * old_price
+            new_total_value = tx_qty * tx_price
+            item.unit_price = round((old_total_value + new_total_value) / item.quantity, 2) if item.quantity > 0 else tx_price
+        elif item.unit_price is None:
+            item.unit_price = 0
+        item.total_value = round(item.quantity * (item.unit_price or 0), 2)
     elif transaction_dict["transaction_type"] == "out":
         if item.quantity < transaction_dict["quantity"]:
-            raise HTTPException(status_code=400, detail="Insufficient stock")
-        item.quantity -= transaction_dict["quantity"]
-    
-    item.total_value = item.quantity * (item.unit_price or 0)
+            raise HTTPException(status_code=400, detail=f"出库失败：库存不足，当前库存 {item.quantity}kg，申请出库 {transaction_dict['quantity']}kg")
+        new_qty = item.quantity - transaction_dict["quantity"]
+        if item.min_stock and new_qty < item.min_stock:
+            raise HTTPException(status_code=400, detail=f"出库警告：出库后库存将降至 {new_qty}kg，低于最低库存线 {item.min_stock}kg")
+        item.quantity = new_qty
+        item.total_value = round(item.quantity * (item.unit_price or 0), 2)
     db.commit()
 
     # 库存低于阈值时向仓管员和管理员推送预警通知

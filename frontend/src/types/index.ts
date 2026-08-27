@@ -26,23 +26,41 @@ export interface MeasurementItem {
   name: string;
   value: number;
   unit: string;
+  /** 数据来源标记：SIMULATED / MANUAL_HARDWARE / HARDWARE_RS485 等；用于前端显示模拟/硬件徽标 */
+  source_hint?: string | null;
 }
 
 export interface Measurement {
-  id: number;
+  id: number | string; // WS 实时推送时用字符串前缀避免冲突
   sensor_id: number;
+  /** 前端便利字段：device_id（后端返回时由 enrich 注入；WS payload 自带）*/
+  device_id?: string | null;
+  /** 前端便利字段：传感器类型名（图表 legend 分组要用）*/
+  sensor_type?: string | null;
   seed_batch_code: string | null;
+  /** 写入该条记录时绑定的地块编码（后端 Measurement.plot_code 列）*/
+  plot_code: string | null;
+  /** 采样时间（后端 Measurement.timestamp 列，与前端 Measurement 显示一致）*/
   timestamp: string;
+  /** 兼容 WS/旧版本别名字段（与 timestamp 等价）*/
+  created_at?: string;
   item_name: string;
+  /** 别名字段：前端 SensorTrendChart / 旧组件兼容 */
+  item_key?: string | null;
   value: number;
   unit: string;
   is_over_limit: boolean;
+  /** 数据来源标记：SIMULATED=前端模拟；MANUAL_HARDWARE=Web Serial硬件；HARDWARE_RS485=桥接脚本真硬件；HARDWARE_RS485_SIM=桥接 --simulate；MANUAL_ENTRY=纯手动录入；new_measurement=WS 实时推送 */
+  source_hint: string | null;
   raw_data: string | null;
+  updated_at?: string;
 }
 
 export interface MeasurementCreate {
   device_id: string;
   items: MeasurementItem[];
+  /** 整包级数据来源，优先级低于 item.source_hint */
+  source_hint?: string | null;
 }
 
 export interface MeasurementListResponse {
@@ -125,6 +143,9 @@ export interface SeedBatch {
   breeding_base: string;
   production_date: string;
   net_weight: number;
+  total_quantity?: number;
+  used_quantity?: number;
+  remaining_quantity?: number;
   germination_rate: number;
   purity: number;
   moisture_content: number;
@@ -132,6 +153,7 @@ export interface SeedBatch {
   keeper: string;
   purchase_contract_no: string;
   status: string;
+  is_depleted?: boolean;
   blockchain_hash: string;
   ipfs_hash: string;
   is_on_chain: boolean;
@@ -309,6 +331,7 @@ export interface Warehouse {
   location: string;
   type: string;
   capacity: number;
+  used_capacity?: number;
   temperature_range: string;
   humidity_range: string;
   manager: string;
@@ -319,6 +342,7 @@ export interface InventoryItem {
   id: number;
   warehouse_id: number;
   warehouse_name?: string;
+  warehouse_location?: string;
   item_code: string;
   item_name: string;
   item_type: string;
@@ -334,6 +358,7 @@ export interface InventoryItem {
   max_stock: number;
   expiry_date: string;
   storage_location: string;
+  traceability_qr_code?: string;
   status: string;
 }
 
@@ -359,7 +384,10 @@ export interface Customer {
   address: string;
   customer_type: string;
   credit_limit: number;
+  credit_balance?: number;
   is_active: boolean;
+  order_count?: number;
+  total_spent?: number;
 }
 
 export interface Order {
@@ -382,11 +410,13 @@ export interface OrderItem {
   item_name: string;
   batch_code: string;
   seed_batch_code?: string;
+  processing_batch_id?: number;
   quantity: number;
   unit: string;
   unit_price: number;
   amount: number;
   product_grade: string;
+  traceability_qr_code?: string | null;
 }
 
 export interface LogisticsTracking {
@@ -402,6 +432,8 @@ export interface LogisticsTracking {
   departure_time: string;
   estimated_arrival_time: string;
   current_location: string;
+  /** 签收人姓名（status='signed' 时由客户/仓管填写）*/
+  signer?: string | null;
 }
 
 export interface BlockchainRecord {

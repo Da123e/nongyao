@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from app.core.database import get_db
@@ -11,8 +11,9 @@ from app.models.seed import SeedBatch
 from app.models.planting import PlantingRecord, Plot
 from app.models.pesticide import PesticideApplication
 from app.models.processing import ProcessingBatch
-from typing import List
+from typing import List, Dict, Any
 from datetime import datetime
+from app.core.timezone import now_cn_naive
 
 router = APIRouter()
 
@@ -20,7 +21,7 @@ router = APIRouter()
 def format_time(created_at) -> str:
     if not created_at:
         return "未知时间"
-    now = datetime.now()
+    now = now_cn_naive()
     delta = now - created_at
     minutes = int(delta.total_seconds() / 60)
     if minutes < 60:
@@ -34,13 +35,20 @@ def format_time(created_at) -> str:
     return created_at.strftime("%Y-%m-%d")
 
 
-@router.get("/operations/recent", response_model=List[dict])
+@router.get("/operations/recent")
 async def get_recent_operations(
-    limit: int = 10,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    operations = []
+    """跨模块聚合最近操作流，支持分页。
+
+    每个模块各取 page * page_size 条（封顶 200 条避免大查询），
+    合并后按时间倒序，再切片取当前页。
+    """
+    fetch_n = min(page * page_size, 200)
+    operations: List[Dict[str, Any]] = []
 
     inventory_transactions = db.query(
         InventoryTransaction.created_at,
@@ -49,7 +57,7 @@ async def get_recent_operations(
         InventoryTransaction.operator,
     ).join(InventoryItem, InventoryTransaction.item_id == InventoryItem.id)\
         .order_by(desc(InventoryTransaction.created_at))\
-        .limit(limit)\
+        .limit(fetch_n)\
         .all()
 
     for t in inventory_transactions:
@@ -69,7 +77,7 @@ async def get_recent_operations(
         Order.created_at,
         Order.store_name,
     ).order_by(desc(Order.created_at))\
-        .limit(limit)\
+        .limit(fetch_n)\
         .all()
 
     for o in orders:
@@ -88,7 +96,7 @@ async def get_recent_operations(
         InspectionReport.report_code,
         InspectionReport.inspector,
     ).order_by(desc(InspectionReport.created_at))\
-        .limit(limit)\
+        .limit(fetch_n)\
         .all()
 
     for r in reports:
@@ -107,7 +115,7 @@ async def get_recent_operations(
         SeedBatch.batch_code,
         SeedBatch.keeper,
     ).order_by(desc(SeedBatch.created_at))\
-        .limit(limit)\
+        .limit(fetch_n)\
         .all()
 
     for s in seed_batches:
@@ -127,7 +135,7 @@ async def get_recent_operations(
         PlantingRecord.farmer,
     ).join(Plot, PlantingRecord.plot_id == Plot.id)\
         .order_by(desc(PlantingRecord.created_at))\
-        .limit(limit)\
+        .limit(fetch_n)\
         .all()
 
     for p in planting_records:
@@ -145,7 +153,7 @@ async def get_recent_operations(
         PesticideApplication.created_at,
         PesticideApplication.applicator,
     ).order_by(desc(PesticideApplication.created_at))\
-        .limit(limit)\
+        .limit(fetch_n)\
         .all()
 
     for pa in pesticide_applications:
@@ -163,7 +171,7 @@ async def get_recent_operations(
         ProcessingBatch.created_at,
         ProcessingBatch.batch_code,
     ).order_by(desc(ProcessingBatch.created_at))\
-        .limit(limit)\
+        .limit(fetch_n)\
         .all()
 
     for pb in processing_batches:
@@ -178,10 +186,22 @@ async def get_recent_operations(
         })
 
     operations.sort(key=lambda x: x["time"], reverse=True)
-    operations = operations[:limit]
 
-    for op in operations:
+    # 切片取当前页
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_items = operations[start:end]
+    has_more = len(operations) > end
+
+    for op in page_items:
         op["time_str"] = format_time(op["time"])
         del op["time"]
 
-    return operations
+    return {
+        "status": "success",
+        "page": page,
+        "page_size": page_size,
+        "total": len(operations),
+        "has_more": has_more,
+        "data": page_items,
+    }

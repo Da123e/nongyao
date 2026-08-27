@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Plus, Search, Eye, FlaskConical, ShoppingCart, X, Link2, Leaf } from 'lucide-react';
 import { api, seedApi } from '../services/api';
 import type { SeedBatch } from '../types';
 import { BatchChainView } from '../components/BatchChainView';
 import { canManagePesticide, canManagePesticideCatalog } from '../utils/roles';
+import { formatDateCn } from '../utils/date';
 
 const batchColors = [
   'bg-green-500',
@@ -88,6 +90,7 @@ export function PesticideManage() {
   const [showChainView, setShowChainView] = useState(false);
   const [selectedBatchCode, setSelectedBatchCode] = useState('');
   const [seedBatches, setSeedBatches] = useState<SeedBatch[]>([]);
+  const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
     fetchData();
@@ -165,6 +168,15 @@ export function PesticideManage() {
     return null;
   };
 
+  const getSeedBatchForPlot = (plotCode: string) => {
+    const plot = plots.find(p => p.plot_code === plotCode);
+    if (plot) {
+      const record = plantingRecords.find(r => r.plot_id === plot.id && r.status === 'growing');
+      return record?.seed_batch_code || '';
+    }
+    return '';
+  };
+
   const handleAddPesticide = () => {
     setModalType('pesticide');
     setFormData({});
@@ -182,6 +194,26 @@ export function PesticideManage() {
     setFormData({});
     setShowModal(true);
   };
+
+  // 从首页快捷卡跳转带 ?action=xxx 参数时自动打开对应弹窗
+  useEffect(() => {
+    const action = searchParams.get('action');
+    if (action === 'new') {
+      setActiveTab('pesticides');
+      handleAddPesticide();
+    } else if (action === 'purchase') {
+      setActiveTab('purchases');
+      handleAddPurchase();
+    } else if (action === 'usage') {
+      setActiveTab('usage');
+      handleAddUsage();
+    }
+    if (action) {
+      searchParams.delete('action');
+      setSearchParams(searchParams, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleViewPesticide = (pesticide: Pesticide) => {
     setSelectedPesticide(pesticide);
@@ -217,6 +249,8 @@ export function PesticideManage() {
       fetchData();
     } catch (err: any) {
       console.error('Failed to create:', err);
+      const errorMsg = err?.response?.data?.detail || '添加失败，请稍后重试';
+      alert(errorMsg);
     }
   };
 
@@ -380,7 +414,7 @@ export function PesticideManage() {
                     const colorIndex = batchIndex >= 0 ? batchIndex : index;
                     return (
                       <tr key={usage.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 text-sm text-gray-600">{new Date(usage.application_date).toLocaleDateString()}</td>
+                        <td className="px-6 py-4 text-sm text-gray-600">{formatDateCn(usage.application_date)}</td>
                         <td className="px-6 py-4 text-sm text-gray-800">{usage.pesticide_name}</td>
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-2">
@@ -437,7 +471,7 @@ export function PesticideManage() {
                   })
                   .map((purchase) => (
                     <tr key={purchase.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 text-sm text-gray-600">{new Date(purchase.purchase_date).toLocaleDateString()}</td>
+                      <td className="px-6 py-4 text-sm text-gray-600">{formatDateCn(purchase.purchase_date)}</td>
                       <td className="px-6 py-4 text-sm text-gray-800">{purchase.pesticide_name}</td>
                       <td className="px-6 py-4 text-sm text-gray-600">{purchase.supplier_name}</td>
                       <td className="px-6 py-4 text-sm text-gray-600">{purchase.quantity} {purchase.unit}</td>
@@ -662,31 +696,40 @@ export function PesticideManage() {
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">种子批次</label>
-                    <select
-                      value={formData.seed_batch_code || ''}
-                      onChange={(e) => {
-                        const batchCode = e.target.value;
-                        const plot = getPlotForSeedBatch(batchCode);
-                        setFormData({ 
-                          ...formData, 
-                          seed_batch_code: batchCode,
-                          plot_code: plot?.plot_code || '',
-                        });
-                      }}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
-                      required
-                    >
-                      <option value="">请选择种子批次</option>
-                      {seedBatches.map(b => {
-                        const plot = getPlotForSeedBatch(b.batch_code);
-                        const plotInfo = plot ? ` (${plot.plot_code} - ${plot.name})` : '';
-                        return (
-                          <option key={b.batch_code} value={b.batch_code}>
-                            {b.batch_code} - {b.variety_name}{plotInfo}
-                          </option>
-                        );
-                      })}
-                    </select>
+                    {formData.plot_code && getSeedBatchForPlot(formData.plot_code) && formData.seed_batch_code === getSeedBatchForPlot(formData.plot_code) ? (
+                      <div className="px-4 py-3 bg-green-50 border border-green-200 rounded-lg">
+                        <div className="text-sm text-green-700">
+                          {formData.seed_batch_code}
+                        </div>
+                        <div className="text-xs text-green-600 mt-1">（根据地块自动关联）</div>
+                      </div>
+                    ) : (
+                      <select
+                        value={formData.seed_batch_code || ''}
+                        onChange={(e) => {
+                          const batchCode = e.target.value;
+                          const plot = getPlotForSeedBatch(batchCode);
+                          setFormData({ 
+                            ...formData, 
+                            seed_batch_code: batchCode,
+                            plot_code: plot?.plot_code || '',
+                          });
+                        }}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                        required
+                      >
+                        <option value="">请选择种子批次</option>
+                        {seedBatches.map(b => {
+                          const plot = getPlotForSeedBatch(b.batch_code);
+                          const plotInfo = plot ? ` (${plot.plot_code} - ${plot.name})` : '';
+                          return (
+                            <option key={b.batch_code} value={b.batch_code}>
+                              {b.batch_code} - {b.variety_name}{plotInfo}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    )}
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">地块</label>
@@ -703,7 +746,15 @@ export function PesticideManage() {
                     ) : (
                       <select
                         value={formData.plot_code || ''}
-                        onChange={(e) => setFormData({ ...formData, plot_code: e.target.value })}
+                        onChange={(e) => {
+                          const plotCode = e.target.value;
+                          const seedBatchCode = getSeedBatchForPlot(plotCode);
+                          setFormData({ 
+                            ...formData, 
+                            plot_code: plotCode,
+                            seed_batch_code: seedBatchCode || formData.seed_batch_code || '',
+                          });
+                        }}
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
                         required
                       >

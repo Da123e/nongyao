@@ -27,6 +27,7 @@ ChartJS.register(
 interface SensorTrendChartProps {
   measurements: Measurement[];
   sensors: Sensor[];
+  compact?: boolean;
 }
 
 const sensorTypeConfig: Record<string, { min: number; max: number; color: string; step: number; decimals: number }> = {
@@ -97,7 +98,7 @@ const removeOutliers = (values: number[], typeConfig?: { min: number; max: numbe
   return { cleaned, outliers };
 };
 
-const SensorTrendChart = ({ measurements, sensors }: SensorTrendChartProps) => {
+const SensorTrendChart = ({ measurements, sensors, compact = false }: SensorTrendChartProps) => {
   const chartData = useMemo(() => {
     if (measurements.length === 0) {
       return {
@@ -364,9 +365,9 @@ const SensorTrendChart = ({ measurements, sensors }: SensorTrendChartProps) => {
   }
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-      <h2 className="text-lg font-semibold text-gray-800 mb-4">历史趋势图</h2>
-      <div className="h-72">
+    <div className={`bg-white rounded-xl shadow-sm border border-gray-100 ${compact ? 'p-4' : 'p-6'}`}>
+      {!compact && <h2 className="text-lg font-semibold text-gray-800 mb-4">历史趋势图</h2>}
+      <div className={compact ? 'h-48' : 'h-72'}>
         <Line data={chartData} options={options} />
       </div>
     </div>

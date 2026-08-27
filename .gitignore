@@ -34,9 +34,17 @@ Untitled Chat.md
 .git_commit_msg.txt
 *_probe_db.py
 *_audit_db.py
+# 运行时日志 / 临时 token 文件
+*.log
+tokens.json
+*.shared-token
+backend/backend_*.log
+vite-sensor*.log
 # pytest 缓存
 .pytest_cache/
 backend/.pytest_cache/
+# 浏览器自动化缓存（Playwright）
+.pw-browsers/
 # Windows 桌面配置
 desktop.ini
 Thumbs.db

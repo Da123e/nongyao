@@ -2,8 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from datetime import datetime
+from app.core.timezone import now_cn_naive
 import hashlib
 import json
+import logging
 from app.core.database import get_db
 from app.core.blockchain import add_record_to_blockchain, calculate_hash
 from app.models.seed import SeedSupplier, SeedBatch, SeedQualityTest
@@ -12,6 +14,8 @@ from app.auth import get_current_active_user, require_permission
 from app.models.auth import User
 from app.schemas import SeedBatchCreate, SupplierCreate
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -191,13 +195,12 @@ async def create_batch(
                 block_number=blockchain_result.get("block_number"),
                 is_on_chain=True,
                 uploaded_by=current_user.id,
-                uploaded_at=datetime.now()
+                uploaded_at=now_cn_naive()
             )
             db.add(blockchain_record)
             db.commit()
-    except Exception:
-        import logging
-        logging.getLogger(__name__).warning("Blockchain upload failed for batch %s", data.batch_code, exc_info=True)
+    except Exception as e:
+        logger.warning("Blockchain upload failed for batch %s: %s", data.batch_code, e, exc_info=True)
         db.rollback()
 
     return {"status": "success", "data": batch, "blockchain": blockchain_result}
@@ -210,6 +213,7 @@ async def get_batches(
     batch_code: str = None,
     variety_name: str = None,
     status: str = None,
+    only_available: bool = Query(False, description="只显示有剩余量的批次"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
@@ -222,16 +226,46 @@ async def get_batches(
         query = query.filter(SeedBatch.variety_name.contains(variety_name))
     if status:
         query = query.filter(SeedBatch.status == status)
+    if only_available:
+        query = query.filter(
+            SeedBatch.total_quantity > 0,
+            SeedBatch.used_quantity < SeedBatch.total_quantity
+        )
     
     total = query.count()
     batches = query.offset((page - 1) * page_size).limit(page_size).all()
+    
+    result = []
+    for b in batches:
+        remaining = (b.total_quantity or 0) - (b.used_quantity or 0)
+        result.append({
+            "id": b.id,
+            "batch_code": b.batch_code,
+            "supplier_id": b.supplier_id,
+            "variety_name": b.variety_name,
+            "breeding_base": b.breeding_base,
+            "production_date": b.production_date.isoformat() if b.production_date else None,
+            "net_weight": b.net_weight,
+            "total_quantity": b.total_quantity,
+            "used_quantity": b.used_quantity or 0,
+            "remaining_quantity": remaining,
+            "germination_rate": b.germination_rate,
+            "purity": b.purity,
+            "moisture_content": b.moisture_content,
+            "disease_pest_test": b.disease_pest_test,
+            "storage_location": b.storage_location,
+            "status": b.status,
+            "supplier_name": b.supplier.name if b.supplier else None,
+            "is_depleted": remaining <= 0 if b.total_quantity else False,
+            "created_at": b.created_at.isoformat() if b.created_at else None,
+        })
     
     return {
         "status": "success",
         "total": total,
         "page": page,
         "page_size": page_size,
-        "data": batches,
+        "data": result,
     }
 
 
@@ -273,82 +307,109 @@ async def get_batch_full_chain(
     from app.models.inventory import InventoryItem
     from app.models.sales import OrderItem, Order
     from app.models.blockchain import BlockchainRecord
-    
+
     batch = db.query(SeedBatch).filter(SeedBatch.batch_code == batch_code).first()
     if not batch:
         raise HTTPException(status_code=404, detail="批次不存在")
-    
+
     supplier = db.query(SeedSupplier).filter(SeedSupplier.id == batch.supplier_id).first()
     quality_tests = db.query(SeedQualityTest).filter(SeedQualityTest.batch_id == batch.id).all()
-    
+
     planting_records = db.query(PlantingRecord).filter(
-        PlantingRecord.seed_batch_code == batch_code
+        or_(
+            PlantingRecord.batch_id == batch.id,
+            PlantingRecord.seed_batch_code == batch_code,
+        )
     ).all()
     plot_ids = [pr.plot_id for pr in planting_records]
-    
-    plots = {p.id: p for p in db.query(Plot).filter(Plot.id.in_(plot_ids)).all()}
-    
-    farming_activities = db.query(FarmingActivity).filter(
-        FarmingActivity.seed_batch_code == batch_code
-    ).all()
-    
-    pesticide_applications = db.query(PesticideApplication).filter(
-        PesticideApplication.seed_batch_code == batch_code
-    ).all()
-    
-    environmental_data = db.query(EnvironmentalData).filter(
-        EnvironmentalData.seed_batch_code == batch_code
-    ).order_by(EnvironmentalData.record_time.desc()).limit(10).all()
-    
+
+    plots = {p.id: p for p in db.query(Plot).filter(Plot.id.in_(plot_ids)).all()} if plot_ids else {}
+
+    # 构造过滤条件：避免把 False / True 塞进 or_，会变成 0/1 字面量，语义错误
+    def add_cond(base_cond, *conds):
+        for c in conds:
+            if c is None or c is False:
+                continue
+            base_cond.append(c)
+
+    fa_conds = [FarmingActivity.seed_batch_code == batch_code]
+    add_cond(fa_conds, FarmingActivity.plot_id.in_(plot_ids) if plot_ids else None)
+    farming_activities = db.query(FarmingActivity).filter(or_(*fa_conds)).all()
+
+    pa_conds = [PesticideApplication.seed_batch_code == batch_code]
+    add_cond(pa_conds, PesticideApplication.plot_id.in_(plot_ids) if plot_ids else None)
+    pesticide_applications = db.query(PesticideApplication).filter(or_(*pa_conds)).all()
+
+    ed_conds = [EnvironmentalData.seed_batch_code == batch_code]
+    add_cond(ed_conds, EnvironmentalData.plot_id.in_(plot_ids) if plot_ids else None)
+    environmental_data = (
+        db.query(EnvironmentalData)
+        .filter(or_(*ed_conds))
+        .order_by(EnvironmentalData.record_time.desc())
+        .limit(10)
+        .all()
+    )
+
     pesticides = {p.id: p for p in db.query(Pesticide).filter(Pesticide.id.in_([pa.pesticide_id for pa in pesticide_applications])).all()}
-    
+
     processing_batches = db.query(ProcessingBatch).filter(
         or_(
             ProcessingBatch.seed_batch_id == batch.id,
-            ProcessingBatch.seed_batch_code == batch_code
+            ProcessingBatch.seed_batch_code == batch_code,
         )
     ).all()
     processing_batch_codes = [pb.batch_code for pb in processing_batches]
-    
+    processing_batch_ids = [pb.id for pb in processing_batches]
+
     processing_records = {}
     for pb in processing_batches:
         processing_records[pb.id] = db.query(ProcessingRecord).filter(ProcessingRecord.batch_id == pb.id).order_by(ProcessingRecord.process_order).all()
-    
-    processing_batch_ids = [pb.id for pb in processing_batches]
-    
-    inspection_query = db.query(InspectionReport).filter(
-        or_(
-            InspectionReport.batch_id == batch.id,
-            InspectionReport.seed_batch_code == batch_code,
-            InspectionReport.processing_batch_id.in_(processing_batch_ids) if processing_batch_ids else False,
-            InspectionReport.plot_id.in_(plot_ids)
-        )
+
+    ins_conds = [
+        InspectionReport.batch_id == batch.id,
+        InspectionReport.seed_batch_code == batch_code,
+    ]
+    add_cond(
+        ins_conds,
+        InspectionReport.processing_batch_id.in_(processing_batch_ids) if processing_batch_ids else None,
+        InspectionReport.plot_id.in_(plot_ids) if plot_ids else None,
     )
-    inspection_reports = inspection_query.all()
-    
+    inspection_reports = db.query(InspectionReport).filter(or_(*ins_conds)).all()
+
     residue_tests = {}
     for report in inspection_reports:
         residue_tests[report.id] = db.query(PesticideResidueTest).filter(PesticideResidueTest.report_id == report.id).all()
-    
-    inventory_items = db.query(InventoryItem).filter(
-        or_(
-            InventoryItem.seed_batch_code == batch_code,
-            InventoryItem.batch_code.in_(processing_batch_codes) if processing_batch_codes else False
-        )
-    ).all()
-    
-    order_items = db.query(OrderItem).filter(
-        or_(
-            OrderItem.seed_batch_code == batch_code,
-            OrderItem.batch_code.in_(processing_batch_codes) if processing_batch_codes else False
-        )
-    ).all()
-    
-    orders = {o.id: o for o in db.query(Order).filter(Order.id.in_([oi.order_id for oi in order_items])).all()}
-    
-    blockchain_records = db.query(BlockchainRecord).filter(
-        BlockchainRecord.seed_batch_id == batch_code
-    ).order_by(BlockchainRecord.created_at.desc()).all()
+
+    inv_conds = [InventoryItem.seed_batch_code == batch_code]
+    add_cond(
+        inv_conds,
+        InventoryItem.batch_code.in_(processing_batch_codes) if processing_batch_codes else None,
+    )
+    inventory_items = db.query(InventoryItem).filter(or_(*inv_conds)).all()
+
+    oi_conds = [OrderItem.seed_batch_code == batch_code]
+    add_cond(
+        oi_conds,
+        OrderItem.batch_code.in_(processing_batch_codes) if processing_batch_codes else None,
+    )
+    order_items = db.query(OrderItem).filter(or_(*oi_conds)).all()
+
+    orders = {o.id: o for o in db.query(Order).filter(Order.id.in_([oi.order_id for oi in order_items])).all()} if order_items else {}
+
+    # seed_batch_id 历史上两种含义：有时候是 batch.id 整型，有时候是 batch_code 字符串；
+    # 加上新增的 seed_batch_code 语义字段，三个维度匹配一次，历史表也能查到数据。
+    bc_conds = [
+        BlockchainRecord.seed_batch_id == str(batch.id),
+        BlockchainRecord.seed_batch_id == batch_code,
+        BlockchainRecord.batch_id == batch_code,
+    ]
+    add_cond(bc_conds, BlockchainRecord.seed_batch_code == batch_code)
+    blockchain_records = (
+        db.query(BlockchainRecord)
+        .filter(or_(*bc_conds))
+        .order_by(BlockchainRecord.created_at.desc())
+        .all()
+    )
     
     return {
         "status": "success",
@@ -418,7 +479,7 @@ async def create_quality_test(
         test_method=data.get("test_method"),
         inspector=data.get("inspector"),
         third_party_certificate=data.get("third_party_certificate"),
-        blockchain_hash=generate_hash(f"{batch_code}{test_item}{test_value}{datetime.now()}"),
+        blockchain_hash=generate_hash(f"{batch_code}{test_item}{test_value}{now_cn_naive()}"),
     )
     db.add(test)
     db.commit()

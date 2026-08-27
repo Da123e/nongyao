@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Foreig
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.core.database import Base
+from app.core.timezone import now_cn_default
 
 
 class ProcessingBatch(Base):
@@ -17,19 +18,19 @@ class ProcessingBatch(Base):
     raw_material_unit = Column(String(20))
     raw_material_appearance = Column(String(200))
     mold_screening_result = Column(String(100))
-    processing_date = Column(DateTime, default=datetime.now, index=True)
+    processing_date = Column(DateTime, default=now_cn_default, index=True)
     expected_finish_date = Column(DateTime)
     product_name = Column(String(100), index=True)
     product_grade = Column(String(20))
     output_quantity = Column(Float)
     output_unit = Column(String(20))
-    traceability_qr_code = Column(String(255))
+    traceability_qr_code = Column(Text)
     status = Column(String(20), default="processing", index=True)
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
     is_on_chain = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
+    updated_at = Column(DateTime, default=now_cn_default, onupdate=now_cn_default)
 
     seed_batch = relationship("SeedBatch")
     processing_records = relationship("ProcessingRecord", back_populates="batch")
@@ -54,7 +55,7 @@ class ProcessingRecord(Base):
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
     is_on_chain = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
 
     batch = relationship("ProcessingBatch", back_populates="processing_records")
 
@@ -65,7 +66,7 @@ class ProductQualityTest(Base):
     id = Column(Integer, primary_key=True, index=True)
     processing_batch_id = Column(Integer, ForeignKey("processing_batches.id"), nullable=False, index=True)
     seed_batch_code = Column(String(50), nullable=False, index=True)
-    test_date = Column(DateTime, default=datetime.now, index=True)
+    test_date = Column(DateTime, default=now_cn_default, index=True)
     test_type = Column(String(50), index=True)
     test_item = Column(String(100), nullable=False, index=True)
     limit_value = Column(Float)
@@ -77,6 +78,6 @@ class ProductQualityTest(Base):
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
     is_on_chain = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
 
     batch = relationship("ProcessingBatch")

@@ -1,8 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Search, Wheat, Leaf, FlaskConical, FileText, Factory, Package, ShoppingCart, CheckCircle, Download, ChevronRight, AlertCircle } from 'lucide-react';
+import { Search, Wheat, Leaf, FlaskConical, FileText, Factory, Package, ShoppingCart, CheckCircle, Download, ChevronRight, AlertCircle, Camera, X, Upload, QrCode, Sparkles } from 'lucide-react';
 import { api, inspectionApi } from '../services/api';
 import { getCurrentUserRole, canExportTracePdf } from '../utils/roles';
+import jsqr from 'jsqr';
+
+// 浏览器原生 BarcodeDetector 的 TS 声明（Chrome / Edge / Safari 17.4+ 原生支持）
+declare global {
+  interface Window {
+    BarcodeDetector?: any;
+  }
+}
 
 interface TraceData {
   seed_batch: {
@@ -105,15 +113,213 @@ interface TraceData {
   }>;
 }
 
-export function TraceQuery() {
+export function TraceQuery({ publicMode = false }: { publicMode?: boolean }) {
   const [batchCode, setBatchCode] = useState('');
   const [traceData, setTraceData] = useState<TraceData | null>(null);
   const [loading, setLoading] = useState(false);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const [searchParams] = useSearchParams();
-  const userRole = getCurrentUserRole();
+  const [searchParams, setSearchParams] = useSearchParams();
+  // 公开扫码页：不看 role，直接走公开接口，展示默认全 7 个阶段
+  const userRole = publicMode ? '' : getCurrentUserRole();
+
+  // ===== 扫码相关：相机扫码 + 相册二维码 =====
+  const [scanOpen, setScanOpen] = useState(false);
+  const [scanError, setScanError] = useState('');
+  const [scanHint, setScanHint] = useState('');
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const detectorRef = useRef<any>(null);
+  const scanClosedRef = useRef(false);
+
+  const stopScan = () => {
+    scanClosedRef.current = true;
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      // eslint-disable-next-line no-param-reassign
+      videoRef.current.srcObject = null;
+    }
+  };
+
+  const parseQrFromImage = async (file: File): Promise<string | null> => {
+    // 优先尝试浏览器原生 BarcodeDetector
+    if (typeof window.BarcodeDetector !== 'undefined') {
+      try {
+        const detector = detectorRef.current || new window.BarcodeDetector({ formats: ['qr_code'] });
+        detectorRef.current = detector;
+        const bitmap = await createImageBitmap(file);
+        const codes = await detector.detect(bitmap);
+        (bitmap as any)?.close?.();
+        if (codes && codes.length > 0 && codes[0]?.rawValue) return codes[0].rawValue;
+      } catch {
+        // 忽略，降级到 jsqr
+      }
+    }
+    // jsqr 降级：纯 JS 解码，任何浏览器都可用
+    try {
+      const img = await loadImage(file);
+      const canvas = document.createElement('canvas');
+      const maxW = 800;
+      const scale = img.width > maxW ? maxW / img.width : 1;
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsqr(imageData.data, imageData.width, imageData.height);
+      if (code && code.data) return code.data;
+    } catch {
+      // 忽略
+    }
+    return null;
+  };
+
+  // 把 File 加载为 HTMLImageElement
+  const loadImage = (file: File): Promise<HTMLImageElement> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = URL.createObjectURL(file);
+    });
+  };
+
+  // 从二维码 rawValue 中提取批次号：支持纯批次号、或 URL 带 ?batch=PB2026-001
+  const extractBatchCode = (raw: string): string => {
+    if (!raw) return '';
+    const t = raw.trim();
+    // 形如 /trace/public?batch=PB2026-001 或 https://xx/trace?batch=PB2026-001
+    const match = t.match(/[?&]batch=([^&#\s]+)/i);
+    if (match && match[1]) return decodeURIComponent(match[1]);
+    // 最后尝试：取 6 位以上字母数字的批次编号（如 PB2026-001）
+    const m2 = t.match(/([A-Z]{1,4}\d{4}[-_]?\d{2,5})/);
+    if (m2 && m2[1]) return m2[1].replace(/_/g, '-');
+    return t;
+  };
+
+  const onScanSuccess = (raw: string) => {
+    const code = extractBatchCode(raw);
+    stopScan();
+    setScanOpen(false);
+    if (code) {
+      setBatchCode(code);
+      setSearchParams(prev => {
+        prev.set('batch', code);
+        return prev;
+      });
+      handleSearch(code);
+    } else {
+      setError('扫码未识别到有效的批次编号');
+    }
+  };
+
+  const startScan = async () => {
+    setScanOpen(true);
+    setScanError('');
+    setScanHint('正在请求相机权限，请允许访问后置摄像头…');
+    scanClosedRef.current = false;
+    // 下一帧等 DOM video 挂好再启动
+    setTimeout(async () => {
+      if (scanClosedRef.current) return;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play().catch(() => {});
+        }
+        const hasNativeDetector = typeof window.BarcodeDetector !== 'undefined';
+        setScanHint(hasNativeDetector
+          ? '请将二维码对准取景框，系统会自动识别（原生加速）'
+          : '请将二维码对准取景框，系统会自动识别');
+
+        const detector = hasNativeDetector
+          ? new window.BarcodeDetector({ formats: ['qr_code'] })
+          : null;
+        detectorRef.current = detector;
+
+        // 用于 jsqr 的离屏 canvas
+        const scanCanvas = document.createElement('canvas');
+        const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
+
+        const tick = async () => {
+          if (scanClosedRef.current) return;
+          try {
+            if (videoRef.current && videoRef.current.readyState >= 2) {
+              // 路径 1: 原生 BarcodeDetector
+              if (detector) {
+                const codes = await detector.detect(videoRef.current);
+                if (codes && codes.length > 0 && codes[0]?.rawValue) {
+                  onScanSuccess(codes[0].rawValue);
+                  return;
+                }
+              }
+              // 路径 2: jsqr 纯 JS 解码（Edge / 所有浏览器通用）
+              if (scanCtx) {
+                const w = videoRef.current.videoWidth;
+                const h = videoRef.current.videoHeight;
+                if (w > 0 && h > 0) {
+                  // 缩小到合理尺寸加速解码
+                  const targetW = 480;
+                  const scale = w > targetW ? targetW / w : 1;
+                  scanCanvas.width = w * scale;
+                  scanCanvas.height = h * scale;
+                  scanCtx.drawImage(videoRef.current, 0, 0, scanCanvas.width, scanCanvas.height);
+                  const imageData = scanCtx.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
+                  const code = jsqr(imageData.data, imageData.width, imageData.height);
+                  if (code && code.data) {
+                    onScanSuccess(code.data);
+                    return;
+                  }
+                }
+              }
+            }
+          } catch {
+            // 忽略单帧识别错误
+          }
+          if (!scanClosedRef.current) {
+            rafRef.current = requestAnimationFrame(tick);
+          }
+        };
+        rafRef.current = requestAnimationFrame(tick);
+      } catch (e: any) {
+        setScanError(e?.name === 'NotAllowedError' ? '您拒绝了相机权限，请改为「从相册上传二维码」或手动输入批次号'
+          : e?.name === 'NotFoundError' ? '当前设备没有可用摄像头，请从相册上传二维码或手动输入'
+          : '相机启动失败：' + (e?.message || '未知错误'));
+        setScanHint('');
+      }
+    }, 80);
+  };
+
+  const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setScanError('');
+    setScanHint('正在解析二维码图片…');
+    const raw = await parseQrFromImage(f);
+    if (raw) {
+      onScanSuccess(raw);
+    } else {
+      setScanError('未能识别二维码，请确保图片清晰或手动输入批次号');
+      setScanHint('');
+    }
+    // 重置 input 允许再次选同一张
+    e.target.value = '';
+  };
+
 
   const roleStages: Record<string, string[]> = {
     admin: ['seed', 'planting', 'pesticide', 'inspection', 'processing', 'inventory', 'sales'],
@@ -123,7 +329,9 @@ export function TraceQuery() {
     salesperson: ['seed', 'planting', 'pesticide', 'inspection', 'processing', 'inventory', 'sales'],
   };
 
-  const visibleStages = roleStages[userRole || 'admin'] || roleStages.admin;
+  const visibleStages = publicMode
+    ? roleStages.admin
+    : roleStages[userRole || 'admin'] || roleStages.admin;
 
   const stageConfig: Record<string, { label: string; icon: any; color: string; bg: string }> = {
     seed: { label: '种子溯源', icon: Wheat, color: 'text-green-600', bg: 'bg-green-500' },
@@ -178,6 +386,8 @@ export function TraceQuery() {
       setBatchCode(urlBatch);
       handleSearch(urlBatch);
     }
+    return () => stopScan();  // 离开页面时保证摄像头关闭
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   const downloadTracePdf = async () => {
@@ -229,8 +439,37 @@ export function TraceQuery() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary-50/30 via-white to-blue-50/30">
-      {!userRole && (
+    <div
+      className={`min-h-screen ${
+        publicMode
+          ? 'bg-gradient-to-br from-green-50 via-white to-emerald-50'
+          : 'bg-gradient-to-br from-primary-50/30 via-white to-blue-50/30'
+      }`}
+    >
+      {/* 顶部：消费者扫码公开页（publicMode）→ 固定独立品牌头，不进任何管理员导航 */}
+      {publicMode && (
+        <header className="bg-white/85 backdrop-blur-md border-b border-green-100 sticky top-0 z-30">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-gradient-to-br from-primary-500 to-primary-700 rounded-xl flex items-center justify-center shadow-md">
+                <Wheat className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <h1 className="font-bold text-gray-800 text-lg">金生链 · 消费者溯源<span className="ml-2 align-middle inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-green-500 to-emerald-600 text-white text-[10px] font-semibold shadow-sm"><QrCode className="w-3 h-3" />扫码端</span></h1>
+                <p className="text-xs text-gray-500">相机扫码 · 相册识别 · 手动输入 — 三种方式查询从种子到餐桌全链信息</p>
+              </div>
+            </div>
+            <Link
+              to="/login"
+              className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-xl text-sm font-medium transition-colors"
+            >
+              平台登录
+            </Link>
+          </div>
+        </header>
+      )}
+      {/* 管理员端（在 Layout 侧栏内部打开 /trace 时不显示品牌头，避免与管理员 Logo 重复） */}
+      {!publicMode && !userRole && (
         <header className="bg-white/80 backdrop-blur-md border-b border-gray-100 sticky top-0 z-30">
           <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
             <Link to="/trace" className="flex items-center gap-3">
@@ -253,24 +492,113 @@ export function TraceQuery() {
       )}
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-6">
+      {/* ===== 扫码查询 Modal ===== */}
+      {scanOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden">
+            <div className="px-5 py-4 flex items-center justify-between bg-gradient-to-r from-green-500 to-emerald-600 text-white">
+              <div className="flex items-center gap-2">
+                <QrCode className="w-5 h-5" />
+                <h3 className="text-base font-bold">扫码识别批次</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => { stopScan(); setScanOpen(false); }}
+                className="p-1.5 rounded-lg hover:bg-white/15 transition-colors"
+                aria-label="关闭扫码"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className="relative aspect-square w-full max-w-sm mx-auto bg-gray-900 rounded-xl overflow-hidden">
+                <video
+                  ref={videoRef}
+                  className="absolute inset-0 w-full h-full object-cover"
+                  playsInline
+                  muted
+                />
+                {/* 取景框辅助线 */}
+                <div className="absolute inset-0 pointer-events-none">
+                  <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-3/5 h-3/5 border-2 border-white/80 rounded-2xl shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]">
+                    <div className="absolute -top-[3px] -left-[3px] w-6 h-6 border-t-4 border-l-4 border-green-400 rounded-tl-xl" />
+                    <div className="absolute -top-[3px] -right-[3px] w-6 h-6 border-t-4 border-r-4 border-green-400 rounded-tr-xl" />
+                    <div className="absolute -bottom-[3px] -left-[3px] w-6 h-6 border-b-4 border-l-4 border-green-400 rounded-bl-xl" />
+                    <div className="absolute -bottom-[3px] -right-[3px] w-6 h-6 border-b-4 border-r-4 border-green-400 rounded-br-xl" />
+                  </div>
+                </div>
+              </div>
+              {scanHint && (
+                <div className="flex items-start gap-2 p-3 rounded-xl bg-green-50 text-green-700 text-sm">
+                  <Sparkles className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <span>{scanHint}</span>
+                </div>
+              )}
+              {scanError && (
+                <div className="flex items-start gap-2 p-3 rounded-xl bg-red-50 text-red-700 text-sm">
+                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <span>{scanError}</span>
+                </div>
+              )}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                <label className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer text-sm font-semibold transition-colors">
+                  <Upload className="w-4 h-4" />
+                  从相册上传二维码
+                  <input type="file" accept="image/*" className="hidden" onChange={onPickFile} />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => { stopScan(); setScanOpen(false); }}
+                  className="px-4 py-2.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-semibold transition-colors"
+                >
+                  改为手动输入
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center">
         <div className="w-16 h-16 bg-gradient-to-br from-green-500 to-green-700 rounded-full flex items-center justify-center mx-auto mb-6">
           <Search className="w-8 h-8 text-white" />
         </div>
         <h2 className="text-2xl font-bold text-gray-800 mb-2">金生链 · 花生全产业链溯源查询</h2>
-        <p className="text-gray-500 mb-6">输入种子批次编号，查询从种子到销售的完整区块链溯源信息</p>
+        <p className="text-gray-500 mb-6">
+          {publicMode
+            ? <>相机扫码 / 相册上传 / 手动输入批次号，三选一即可查询区块链全链路信息</>
+            : <>输入种子批次编号，查询从种子到销售的完整区块链溯源信息</>}
+        </p>
         
-        <div className="flex gap-3 max-w-md mx-auto">
+        {publicMode && (
+          <div className="max-w-lg mx-auto mb-6 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={startScan}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 text-white hover:brightness-110 shadow-lg shadow-indigo-500/25 font-semibold transition-all"
+            >
+              <Camera className="w-5 h-5" />
+              相机扫码查询
+            </button>
+            <label className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-r from-sky-500 to-cyan-600 text-white hover:brightness-110 shadow-lg shadow-sky-500/20 font-semibold cursor-pointer transition-all">
+              <Upload className="w-5 h-5" />
+              相册扫码上传
+              <input type="file" accept="image/*" className="hidden" onChange={onPickFile} />
+            </label>
+          </div>
+        )}
+
+        <div className="flex gap-3 max-w-2xl mx-auto flex-wrap justify-center">
           <input
             type="text"
             value={batchCode}
             onChange={(e) => setBatchCode(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="请输入批次编号"
-            className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+            placeholder="请输入批次编号，如 PB2026-001"
+            className="flex-1 min-w-[200px] px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
           />
           <button
-            onClick={handleSearch}
+            onClick={() => handleSearch()}
             disabled={loading}
             className="px-6 py-3 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors disabled:opacity-50"
           >
@@ -322,10 +650,21 @@ export function TraceQuery() {
               <div className="text-sm text-gray-600">
                 <p className="font-medium text-gray-700 mb-1">如何使用？</p>
                 <ul className="space-y-1 text-gray-500">
-                  <li>1. 在上方输入框中输入种子批次编号（如 E2E-SEED-000242）</li>
-                  <li>2. 点击「查询」按钮或按回车键</li>
-                  <li>3. 系统将展示该批次从种子到销售的全链路溯源信息</li>
-                  <li>4. 可在「种子溯源」模块中查看所有批次编号</li>
+                  {publicMode ? (
+                    <>
+                      <li>1. <span className="font-medium text-emerald-700">相机扫码</span>：点「相机扫码查询」授权后置摄像头，对准包装上的二维码自动识别</li>
+                      <li>2. <span className="font-medium text-sky-700">相册扫码</span>：点「相册扫码上传」从相册选择已拍摄的二维码图片</li>
+                      <li>3. <span className="font-medium text-gray-700">手动输入</span>：在下方输入批次编号（如 PB2026-001），按回车或点「查询」</li>
+                      <li>4. 系统将展示该批次从种子到销售的全链路区块链溯源信息</li>
+                    </>
+                  ) : (
+                    <>
+                      <li>1. 在上方输入框中输入种子批次编号（如 PB2026-001）</li>
+                      <li>2. 点击「查询」按钮或按回车键</li>
+                      <li>3. 系统将展示该批次从种子到销售的全链路溯源信息</li>
+                      <li>4. 可在「种子溯源」模块中查看所有批次编号</li>
+                    </>
+                  )}
                 </ul>
               </div>
             </div>

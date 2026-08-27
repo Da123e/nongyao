@@ -12,6 +12,19 @@ import time
 import signal
 import json
 
+# ===== 统一时区（中国时区 Asia/Shanghai） =====
+# 作为"第一道防线"：让 Python 的 datetime.now() 按北京时间计算，
+# 避免部署到 UTC 的 Docker 容器时所有 now() 错 8 小时。
+# 另外 Column default 和 routers 中的显式 datetime.now 调用仍会通过 app/core/timezone.py now_cn_naive()
+# 做二次保障，双保险不会错。
+os.environ.setdefault("TZ", "Asia/Shanghai")
+try:
+    import time as _time
+    if hasattr(_time, "tzset"):
+        _time.tzset()
+except Exception:  # Windows 没有 tzset，忽略即可（Windows 系统本身就是本地时区）
+    pass
+
 ganache_process = None
 ipfs_process = None
 _is_initialized = False
@@ -187,39 +200,128 @@ signal.signal(signal.SIGTERM, cleanup_processes)
 Base.metadata.create_all(bind=engine)
 
 def migrate_environmental_data_columns():
-    """自动补齐 environmental_data 表的新列（若不存在）"""
+    """自动补齐 environmental_data 表的新列（若不存在）。同时兼容 MySQL(INFORMATION_SCHEMA) 和 SQLite(PRAGMA table_info)。"""
     from sqlalchemy import text
-    from app.core.database import SessionLocal
+    from app.core.database import SessionLocal, SQLALCHEMY_DATABASE_URL
+    is_sqlite = str(SQLALCHEMY_DATABASE_URL).startswith("sqlite")
     columns = {
-        'soil_temperature': 'FLOAT NULL COMMENT \'土壤温度(soil_multi专用，区分空气温度temperature)\'',
-        'illumination': 'FLOAT NULL COMMENT \'光照强度(lux)\'',
-        'wind_speed': 'FLOAT NULL COMMENT \'风速(m/s)\'',
-        'conductivity': 'FLOAT NULL COMMENT \'电导率(us/cm)\'',
-        'nitrogen': 'FLOAT NULL COMMENT \'氮(mg/kg)\'',
-        'phosphorus': 'FLOAT NULL COMMENT \'磷(mg/kg)\'',
-        'potassium': 'FLOAT NULL COMMENT \'钾(mg/kg)\'',
-        'salinity': 'FLOAT NULL COMMENT \'盐分(mg/kg)\'',
-        'data_source': 'VARCHAR(50) NULL COMMENT \'数据来源：sensor=硬件上传/manual=农残手动录入\'',
+        'soil_temperature': 'FLOAT NULL' if is_sqlite else 'FLOAT NULL COMMENT \'土壤温度(soil_multi专用，区分空气温度temperature)\'',
+        'illumination': 'FLOAT NULL' if is_sqlite else 'FLOAT NULL COMMENT \'光照强度(lux)\'',
+        'wind_speed': 'FLOAT NULL' if is_sqlite else 'FLOAT NULL COMMENT \'风速(m/s)\'',
+        'conductivity': 'FLOAT NULL' if is_sqlite else 'FLOAT NULL COMMENT \'电导率(us/cm)\'',
+        'nitrogen': 'FLOAT NULL' if is_sqlite else 'FLOAT NULL COMMENT \'氮(mg/kg)\'',
+        'phosphorus': 'FLOAT NULL' if is_sqlite else 'FLOAT NULL COMMENT \'磷(mg/kg)\'',
+        'potassium': 'FLOAT NULL' if is_sqlite else 'FLOAT NULL COMMENT \'钾(mg/kg)\'',
+        'salinity': 'FLOAT NULL' if is_sqlite else 'FLOAT NULL COMMENT \'盐分(mg/kg)\'',
+        'data_source': 'VARCHAR(50) NULL' if is_sqlite else 'VARCHAR(50) NULL COMMENT \'数据来源：sensor=硬件上传/manual=农残手动录入\'',
     }
     db = SessionLocal()
     try:
-        rows = db.execute(text(
-            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
-            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='environmental_data'"
-        )).fetchall()
-        existing = {r[0] for r in rows}
+        if is_sqlite:
+            rows = db.execute(text("PRAGMA table_info(environmental_data)")).fetchall()
+            # PRAGMA 结果：(cid, name, type, notnull, dflt_value, pk)，列名取第 2 位 name
+            existing = {r[1] for r in rows}
+        else:
+            rows = db.execute(text(
+                "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='environmental_data'"
+            )).fetchall()
+            existing = {r[0] for r in rows}
         for col, ddl in columns.items():
             if col not in existing:
                 db.execute(text(f"ALTER TABLE environmental_data ADD COLUMN {col} {ddl}"))
-                print(f"[INFO] 数据库迁移：新增列 {col}")
+                print(f"[INFO] 数据库迁移：environmental_data 新增列 {col}")
         db.commit()
     except Exception as e:
-        print(f"[WARNING] 数据库迁移列失败（可忽略）: {e}")
+        print(f"[WARNING] 数据库迁移 environmental_data 列失败（可忽略）: {e}")
         db.rollback()
     finally:
         db.close()
 
+
+def migrate_measurements_columns():
+    """自动补齐 measurements 表的新列（传感器历史记录关联地块/批次的反查列）。MySQL / SQLite 双兼容。"""
+    from sqlalchemy import text
+    from app.core.database import SessionLocal, SQLALCHEMY_DATABASE_URL
+    is_sqlite = str(SQLALCHEMY_DATABASE_URL).startswith("sqlite")
+    columns = {
+        'plot_code': 'VARCHAR(50) NULL' if is_sqlite else 'VARCHAR(50) NULL COMMENT \'上传时刻绑定的地块编码，sensor 切换地块后历史记录仍可溯源\'',
+        'source_hint': 'VARCHAR(32) NULL' if is_sqlite else 'VARCHAR(32) NULL COMMENT \'数据来源标记：SIMULATED/MANUAL_HARDWARE/HARDWARE_RS485，用于前端区分模拟/硬件\'',
+    }
+    db = SessionLocal()
+    try:
+        if is_sqlite:
+            rows = db.execute(text("PRAGMA table_info(measurements)")).fetchall()
+            existing = {r[1] for r in rows}
+        else:
+            rows = db.execute(text(
+                "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='measurements'"
+            )).fetchall()
+            existing = {r[0] for r in rows}
+        for col, ddl in columns.items():
+            if col not in existing:
+                db.execute(text(f"ALTER TABLE measurements ADD COLUMN {col} {ddl}"))
+                print(f"[INFO] 数据库迁移：measurements 新增列 {col}")
+        db.commit()
+    except Exception as e:
+        print(f"[WARNING] 数据库迁移 measurements 列失败（可忽略）: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
+def migrate_blockchain_records_columns():
+    """
+    blockchain_records 增加 seed_batch_code 语义化批次列。
+    溯源接口（/seed/batches/{code}/full-chain）要同时按 seed_batch_id（历史字段）
+    和 seed_batch_code（推荐字段）匹配，此函数保证该列在旧数据库里也能补上。
+    MySQL / SQLite 双兼容。
+    """
+    from sqlalchemy import text
+    from app.core.database import SessionLocal, SQLALCHEMY_DATABASE_URL
+    is_sqlite = str(SQLALCHEMY_DATABASE_URL).startswith("sqlite")
+    columns = {
+        'seed_batch_code': 'VARCHAR(100) NULL' if is_sqlite else 'VARCHAR(100) NULL COMMENT \'语义化批次编码(PB2026-001)，溯源直接反查\'',
+    }
+    db = SessionLocal()
+    try:
+        if is_sqlite:
+            rows = db.execute(text("PRAGMA table_info(blockchain_records)")).fetchall()
+            existing = {r[1] for r in rows}
+        else:
+            rows = db.execute(text(
+                "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='blockchain_records'"
+            )).fetchall()
+            existing = {r[0] for r in rows}
+        for col, ddl in columns.items():
+            if col not in existing:
+                db.execute(text(f"ALTER TABLE blockchain_records ADD COLUMN {col} {ddl}"))
+                db.execute(text(f"ALTER TABLE blockchain_records ADD INDEX idx_blockchain_records_{col} ({col})"))
+                print(f"[INFO] 数据库迁移：blockchain_records 新增列 {col}")
+        # 历史记录回填：旧记录只有 seed_batch_id（=语义化批次字符串），同步到 seed_batch_code
+        try:
+            upd = db.execute(text(
+                "UPDATE blockchain_records SET seed_batch_code = seed_batch_id "
+                "WHERE seed_batch_code IS NULL AND seed_batch_id IS NOT NULL"
+            ))
+            if getattr(upd, "rowcount", 0) or True:
+                print(f"[INFO] 数据库迁移：blockchain_records 回填 seed_batch_code")
+            db.commit()
+        except Exception as e:
+            print(f"[WARNING] 回填 blockchain_records.seed_batch_code 失败（可忽略）: {e}")
+            db.rollback()
+    except Exception as e:
+        print(f"[WARNING] 数据库迁移 blockchain_records 列失败（可忽略）: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
 migrate_environmental_data_columns()
+migrate_measurements_columns()
+migrate_blockchain_records_columns()
 
 from contextlib import asynccontextmanager
 
@@ -289,7 +391,26 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    # 真实探测：执行一次 SELECT 1 验证数据库连接；失败则明确返回 unhealthy 503
+    from app.core.database import SessionLocal
+    from sqlalchemy import text
+    db_ok = False
+    db_msg = "unreachable"
+    try:
+        with SessionLocal() as sess:
+            sess.execute(text("SELECT 1")).fetchone()
+            db_ok = True
+            db_msg = "ok"
+    except Exception as e:  # noqa: BLE001
+        db_msg = f"error: {type(e).__name__}"
+    overall = "healthy" if db_ok else "unhealthy"
+    from fastapi import status as http_status
+    if db_ok:
+        return {"status": overall, "database": db_msg}
+    return JSONResponse(
+        status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"status": overall, "database": db_msg},
+    )
 
 
 @app.websocket("/api/ws")

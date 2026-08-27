@@ -5,6 +5,7 @@ from app.core.database import get_db
 from app.auth import get_current_active_user
 from app.models.auth import User, Notification
 from datetime import datetime
+from app.core.timezone import now_cn_naive
 
 router = APIRouter()
 
@@ -24,7 +25,7 @@ async def get_notifications(
     ).scalar()
 
     result = []
-    now = datetime.now()
+    now = now_cn_naive()
     for n in notifications:
         if n.created_at:
             delta = now - n.created_at

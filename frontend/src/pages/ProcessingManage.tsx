@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Factory, Clock, X, Eye, ChevronDown, ChevronUp, Link2 } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { Plus, Search, Factory, Clock, X, Eye, ChevronDown, ChevronUp, Link2, CheckCircle } from 'lucide-react';
 import { processingApi, seedApi } from '../services/api';
 import type { ProcessingBatch, ProcessingRecord, SeedBatch } from '../types/index.ts';
 import { BatchChainView } from '../components/BatchChainView';
@@ -41,6 +42,7 @@ export function ProcessingManage() {
   const [selectedBatchCode, setSelectedBatchCode] = useState('');
   const [seedBatches, setSeedBatches] = useState<SeedBatch[]>([]);
   const [selectedSeedBatchCode, setSelectedSeedBatchCode] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
     fetchBatches();
@@ -74,6 +76,19 @@ export function ProcessingManage() {
     setShowModal(true);
   };
 
+  // 从首页快捷卡跳转带 ?action=xxx 参数时自动打开对应弹窗
+  useEffect(() => {
+    const action = searchParams.get('action');
+    if (action === 'new') {
+      handleCreate();
+    }
+    if (action) {
+      searchParams.delete('action');
+      setSearchParams(searchParams, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -82,6 +97,37 @@ export function ProcessingManage() {
       fetchBatches();
     } catch (err: any) {
       console.error('Failed to create batch:', err);
+      const errorMsg = err?.response?.data?.detail || '创建失败，请稍后重试';
+      alert(errorMsg);
+    }
+  };
+
+  const handleCompleteBatch = async (batch: ProcessingBatch) => {
+    const defaultPrice = batch.product_grade === '特级' ? 20 : batch.product_grade === '一级' ? 15 : 10;
+    const priceInput = prompt(
+      `完成批次 ${batch.batch_code} 并入库\n\n` +
+      `产品: ${batch.product_name} (${batch.product_grade || '普通'})\n` +
+      `产量: ${batch.output_quantity} ${batch.output_unit || 'kg'}\n\n` +
+      `请入库单价 (元/kg)，留空则使用默认值 ${defaultPrice}：`,
+      String(defaultPrice)
+    );
+    if (priceInput === null) return;
+    const unitPrice = parseFloat(priceInput);
+    if (isNaN(unitPrice) || unitPrice < 0) {
+      alert('请输入有效的单价（不小于0的数字）');
+      return;
+    }
+    try {
+      await processingApi.updateBatchStatus(batch.batch_code, { 
+        status: 'completed',
+        unit_price: unitPrice
+      });
+      alert(`批次 ${batch.batch_code} 已完成，库存已自动更新\n单价: ¥${unitPrice}/kg，总价值: ¥${((batch.output_quantity || 0) * unitPrice).toFixed(2)}`);
+      fetchBatches();
+    } catch (err: any) {
+      console.error('Failed to complete batch:', err);
+      const errorMsg = err?.response?.data?.detail || '操作失败，请稍后重试';
+      alert(errorMsg);
     }
   };
 
@@ -197,8 +243,10 @@ export function ProcessingManage() {
                         <td className="px-6 py-4 text-sm text-gray-800">{batch.product_name}</td>
                         <td className="px-6 py-4 text-sm text-gray-600">{batch.product_grade}</td>
                         <td className="px-6 py-4 text-sm text-gray-600">{batch.processing_date}</td>
-                        <td className="px-6 py-4 text-sm text-gray-600">{batch.raw_material_quantity} kg</td>
-                        <td className="px-6 py-4 text-sm text-gray-600">{batch.output_quantity} kg</td>
+                        <td className="px-6 py-4 text-sm text-gray-600">{batch.raw_material_quantity ?? '-'} kg</td>
+                        <td className="px-6 py-4 text-sm text-gray-600">
+                          {batch.output_quantity != null ? `${batch.output_quantity} ${batch.output_unit || 'kg'}` : <span className="text-gray-400">-</span>}
+                        </td>
                         <td className="px-6 py-4">
                           <span className={`px-2 py-1 text-xs rounded-full ${
                             batch.status === 'processing' ? 'bg-blue-100 text-blue-700' :
@@ -208,15 +256,27 @@ export function ProcessingManage() {
                           </span>
                         </td>
                         <td className="px-6 py-4 text-sm text-right">
-                          {batch.seed_batch_code && (
-                            <button onClick={() => handleViewChain(batch.seed_batch_code!)} className={`flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-opacity-80 mr-2 ${getBatchBgColor(colorIndex)} ${getBatchTextColor(colorIndex)}`}>
-                              <Link2 className="w-3 h-3" />
-                              溯源
+                          <div className="flex items-center justify-end gap-1">
+                            {batch.status === 'processing' && canManageProcessing() && (
+                              <button
+                                onClick={() => handleCompleteBatch(batch)}
+                                className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
+                                title="完成加工并入库"
+                              >
+                                <CheckCircle className="w-3 h-3" />
+                                完成
+                              </button>
+                            )}
+                            {batch.seed_batch_code && (
+                              <button onClick={() => handleViewChain(batch.seed_batch_code!)} className={`flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-opacity-80 ${getBatchBgColor(colorIndex)} ${getBatchTextColor(colorIndex)}`}>
+                                <Link2 className="w-3 h-3" />
+                                溯源
+                              </button>
+                            )}
+                            <button onClick={() => handleViewBatch(batch)} className="text-gray-400 hover:text-green-500" title="查看详情">
+                              <Eye className="w-4 h-4" />
                             </button>
-                          )}
-                          <button onClick={() => handleViewBatch(batch)} className="text-gray-400 hover:text-green-500" title="查看详情">
-                            <Eye className="w-4 h-4" />
-                          </button>
+                          </div>
                         </td>
                       </tr>
                       {expandedBatch === batch.batch_code && (
@@ -311,15 +371,50 @@ export function ProcessingManage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">种子批次</label>
                 <select
                   value={formData.seed_batch_code || ''}
-                  onChange={(e) => setFormData({ ...formData, seed_batch_code: e.target.value })}
+                  onChange={(e) => {
+                    const selectedCode = e.target.value;
+                    const selectedBatch = seedBatches.find((b: any) => b.batch_code === selectedCode);
+                    const updatedData: any = { ...formData, seed_batch_code: selectedCode };
+                    if (selectedBatch) {
+                      if (!formData.raw_material_quantity && selectedBatch.net_weight) {
+                        updatedData.raw_material_quantity = selectedBatch.net_weight;
+                      }
+                      if (selectedBatch.variety_name) {
+                        updatedData.product_name = formData.product_name || `${selectedBatch.variety_name}加工成品`;
+                      }
+                    }
+                    setFormData(updatedData);
+                  }}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
                   required
                 >
                   <option value="">请选择种子批次</option>
-                  {seedBatches.map((batch) => (
-                    <option key={batch.id} value={batch.batch_code}>{batch.batch_code} - {batch.variety_name}</option>
-                  ))}
+                  {seedBatches
+                    .filter((b: any) => !b.is_depleted)
+                    .map((batch: any) => {
+                      const remaining = batch.remaining_quantity ?? batch.net_weight ?? 0;
+                      const total = batch.total_quantity ?? batch.net_weight ?? 0;
+                      return (
+                        <option key={batch.id} value={batch.batch_code}>
+                          {batch.batch_code} - {batch.variety_name} (剩余: {remaining}{total ? `/${total}` : ''}kg)
+                        </option>
+                      );
+                    })}
                 </select>
+                {(() => {
+                  const selected = seedBatches.find((b: any) => b.batch_code === formData.seed_batch_code);
+                  if (selected) {
+                    const remaining = selected.remaining_quantity ?? selected.net_weight ?? 0;
+                    return (
+                      <p className="mt-1 text-xs text-gray-500">
+                        可用库存: <span className={remaining > 0 ? 'text-green-600 font-medium' : 'text-red-600'}>{remaining} kg</span>
+                        {selected.total_quantity && <span className="text-gray-400"> (总量: {selected.total_quantity} kg)</span>}
+                        {selected.net_weight && <span className="text-gray-400">, 净重: {selected.net_weight} kg</span>}
+                      </p>
+                    );
+                  }
+                  return null;
+                })()}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">产品名称</label>
@@ -362,21 +457,48 @@ export function ProcessingManage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">原料量(kg)</label>
-                  <input
-                    type="number"
-                    value={formData.raw_material_quantity || ''}
-                    onChange={(e) => setFormData({ ...formData, raw_material_quantity: parseFloat(e.target.value) })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
-                    required
-                  />
+                  {(() => {
+                    const selected = seedBatches.find((b: any) => b.batch_code === formData.seed_batch_code);
+                    const maxAllowed = selected ? (selected.remaining_quantity ?? selected.net_weight ?? 0) : null;
+                    return (
+                      <>
+                        <input
+                          type="number"
+                          value={formData.raw_material_quantity || ''}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            if (maxAllowed !== null && val > maxAllowed) {
+                              alert(`原料量不能超过种子批次剩余库存 ${maxAllowed}kg`);
+                              return;
+                            }
+                            setFormData({ ...formData, raw_material_quantity: val });
+                          }}
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                          required
+                          max={maxAllowed ?? undefined}
+                        />
+                        {maxAllowed !== null && (
+                          <p className="mt-1 text-xs text-gray-500">
+                            最大允许: <span className="font-medium text-orange-600">{maxAllowed} kg</span>
+                          </p>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">产量(kg)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    产量(kg)
+                    <span className="text-xs text-gray-400 ml-1">(建议为原料量的 85%)</span>
+                  </label>
                   <input
                     type="number"
-                    value={formData.output_quantity || ''}
-                    onChange={(e) => setFormData({ ...formData, output_quantity: parseFloat(e.target.value) })}
+                    value={formData.output_quantity ?? ''}
+                    onChange={(e) => setFormData({ ...formData, output_quantity: e.target.value ? parseFloat(e.target.value) : undefined })}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                    placeholder={formData.raw_material_quantity ? `建议: ${(formData.raw_material_quantity * 0.85).toFixed(1)}` : '请输入产量'}
+                    step="0.01"
+                    min="0"
                   />
                 </div>
               </div>
@@ -420,11 +542,15 @@ export function ProcessingManage() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="p-4 bg-gray-50 rounded-lg">
                   <p className="text-sm text-gray-500">原料量</p>
-                  <p className="font-medium text-gray-800">{selectedBatch.raw_material_quantity} kg</p>
+                  <p className="font-medium text-gray-800">{selectedBatch.raw_material_quantity ?? '-'} kg</p>
                 </div>
                 <div className="p-4 bg-gray-50 rounded-lg">
                   <p className="text-sm text-gray-500">产量</p>
-                  <p className="font-medium text-gray-800">{selectedBatch.output_quantity} kg</p>
+                  <p className="font-medium text-gray-800">
+                    {selectedBatch.output_quantity != null 
+                      ? `${selectedBatch.output_quantity} ${selectedBatch.output_unit || 'kg'}` 
+                      : '-'}
+                  </p>
                 </div>
               </div>
               <div className="p-4 bg-gray-50 rounded-lg">

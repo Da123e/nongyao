@@ -1,15 +1,66 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from sqlalchemy.orm import Session
-from typing import List
+from sqlalchemy import or_, func
+from typing import List, Optional
 import logging
 from app.core.database import get_db
+from app.core.qrcode_generator import generate_trace_qrcode
 from app.models.sales import Customer, Order, OrderItem, LogisticsTracking
 from app.models.auth import User
 from app.auth import get_current_active_user, require_permission
-from app.schemas import CustomerCreate, OrderCreate, LogisticsCreate
-from datetime import datetime
+from app.schemas import CustomerCreate, OrderCreate, LogisticsCreate, OrderItemCreate
+from datetime import datetime, timezone, timedelta
+from app.core.timezone import now_cn_naive
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# ----------------------------------------------------------------------------
+# 业务常量（物流 / 订单 状态机）
+# ----------------------------------------------------------------------------
+VALID_LOGISTICS_STATUSES = {
+    "pending", "loading", "in_transit",
+    "arrived", "delivered", "signed", "completed", "cancelled",
+}
+
+LOGISTICS_STATUS_TO_ORDER = {
+    "pending": "pending",
+    "loading": "paid",
+    "in_transit": "shipped",
+    "arrived": "shipped",
+    "delivered": "completed",
+    "signed": "completed",
+    "completed": "completed",
+    "cancelled": "cancelled",
+}
+
+VALID_ORDER_STATUSES = {
+    "pending", "paid", "shipped", "completed", "cancelled", "refunded",
+}
+
+ORDER_STATUS_FLOW = ["pending", "paid", "shipped", "completed"]
+
+ORDER_STATUS_PRIORITY = {
+    "cancelled": 0, "refunded": 0,
+    "pending":   1,
+    "paid":      2,
+    "shipped":   3,
+    "completed": 4,
+}
+
+
+def _safe_cn_dt(value: Optional[datetime]) -> Optional[datetime]:
+    """把 aware datetime (带 +08:00) 统一转换为 naive China-time,写入 DB.
+
+    DB 列 / now_cn_default / now_cn_naive 统一使用 Asia/Shanghai naive datetime.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime) and value.tzinfo is not None:
+        offset = timezone(timedelta(hours=8))
+        return value.astimezone(offset).replace(tzinfo=None)
+    return value
 
 
 @router.get("/customers", response_model=List[dict])
@@ -25,8 +76,16 @@ async def get_customers(
         query = query.filter(Customer.customer_type == customer_type)
     
     customers = query.all()
-    return [
-        {
+    result = []
+    for c in customers:
+        order_count = db.query(Order).filter(Order.customer_id == c.id).count()
+        total_spent = db.query(
+            func.coalesce(func.sum(Order.total_amount), 0)
+        ).filter(
+            Order.customer_id == c.id,
+            Order.status.in_(['paid', 'shipped', 'completed'])
+        ).scalar() or 0
+        result.append({
             "id": c.id,
             "customer_code": c.customer_code,
             "name": c.name,
@@ -38,10 +97,11 @@ async def get_customers(
             "credit_limit": c.credit_limit,
             "credit_balance": c.credit_balance,
             "is_active": c.is_active,
+            "order_count": order_count,
+            "total_spent": float(total_spent),
             "created_at": c.created_at.isoformat() if c.created_at else None,
-        }
-        for c in customers
-    ]
+        })
+    return result
 
 
 @router.post("/customers")
@@ -63,18 +123,21 @@ async def create_customer(
     return {"message": "Customer created successfully", "customer_id": customer.id}
 
 
-@router.get("/orders", response_model=List[dict])
+@router.get("/orders")
 async def get_orders(
-    customer_id: int = None,
-    status: str = None,
-    payment_status: str = None,
-    start_date: str = None,
-    end_date: str = None,
+    customer_id: Optional[int] = None,
+    status: Optional[str] = None,
+    payment_status: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=200, description="每页数量"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
+    """销售订单分页列表（与 organizations / seed / processing / inspection 分页包装一致）。"""
     await require_permission("sales:query", current_user, db)
-    
+
     query = db.query(Order)
     if customer_id:
         query = query.filter(Order.customer_id == customer_id)
@@ -83,16 +146,30 @@ async def get_orders(
     if payment_status:
         query = query.filter(Order.payment_status == payment_status)
     if start_date:
-        query = query.filter(Order.order_date >= datetime.fromisoformat(start_date))
+        try:
+            query = query.filter(Order.order_date >= _safe_cn_dt(datetime.fromisoformat(start_date)))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="start_date 必须为 ISO8601 格式")
     if end_date:
-        query = query.filter(Order.order_date <= datetime.fromisoformat(end_date))
-    
-    orders = query.order_by(Order.order_date.desc()).all()
-    return [
+        try:
+            query = query.filter(Order.order_date <= _safe_cn_dt(datetime.fromisoformat(end_date)))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="end_date 必须为 ISO8601 格式")
+
+    total = query.count()
+    orders = (
+        query.order_by(Order.order_date.desc(), Order.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    data = [
         {
             "id": o.id,
             "order_no": o.order_no,
             "customer_id": o.customer_id,
+            "customer_name": o.customer.name if o.customer else None,
             "order_date": o.order_date.isoformat() if o.order_date else None,
             "delivery_date": o.delivery_date.isoformat() if o.delivery_date else None,
             "status": o.status,
@@ -102,9 +179,19 @@ async def get_orders(
             "shipping_address": o.shipping_address,
             "shipping_method": o.shipping_method,
             "remarks": o.remarks,
+            "created_at": o.created_at.isoformat() if o.created_at else None,
+            "updated_at": o.updated_at.isoformat() if o.updated_at else None,
         }
         for o in orders
     ]
+    return {
+        "status": "success",
+        "data": data,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "has_more": (page * page_size) < total,
+    }
 
 
 @router.post("/orders")
@@ -118,10 +205,39 @@ async def create_order(
     if db.query(Order).filter(Order.order_no == order_data.order_no).first():
         raise HTTPException(status_code=400, detail="订单编号已存在")
 
-    order = Order(**order_data.dict())
+    # 非法状态校验
+    if order_data.status and order_data.status not in VALID_ORDER_STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"订单状态非法,允许值: {sorted(VALID_ORDER_STATUSES)}",
+        )
+
+    # 后端强制重算 total_amount = sum(quantity * unit_price),不信任前端传值
+    items = getattr(order_data, "items", None) or []
+    recalculated_total = 0.0
+    for it in items:
+        try:
+            qty = float(getattr(it, "quantity", 0) or 0)
+            price = getattr(it, "unit_price", None)
+            if price is None:
+                continue
+            recalculated_total += qty * float(price)
+        except (TypeError, ValueError):
+            continue
+    recalculated_total = round(recalculated_total, 2) if items else (order_data.total_amount or 0)
+
+    payload = order_data.dict(exclude={"total_amount"})
+    payload["order_date"] = _safe_cn_dt(payload.get("order_date"))
+    payload["delivery_date"] = _safe_cn_dt(payload.get("delivery_date"))
+    order = Order(total_amount=recalculated_total, **payload)
     db.add(order)
-    db.commit()
-    db.refresh(order)
+    try:
+        db.commit()
+        db.refresh(order)
+    except Exception as e:
+        db.rollback()
+        logger.exception("创建订单失败 order_no=%s: %s", order_data.order_no, e)
+        raise HTTPException(status_code=500, detail="创建订单失败")
 
     # 推送新订单通知给销售员和管理员
     try:
@@ -134,9 +250,10 @@ async def create_order(
         )
         db.commit()
     except Exception as e:
-        logging.getLogger(__name__).warning(f"notify_new_order failed: {e}")
+        logger.warning("notify_new_order failed order_id=%s: %s", order.id, e)
+        db.rollback()
 
-    return {"message": "Order created successfully", "order_id": order.id}
+    return {"message": "Order created successfully", "order_id": order.id, "total_amount": order.total_amount}
 
 
 @router.get("/orders/{order_id}", response_model=dict)
@@ -146,18 +263,91 @@ async def get_order_detail(
     current_user: User = Depends(get_current_active_user),
 ):
     await require_permission("sales:query", current_user, db)
-    
+
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    
+
     items = db.query(OrderItem).filter(OrderItem.order_id == order_id).all()
-    logistics = db.query(LogisticsTracking).filter(LogisticsTracking.order_id == order_id).first()
-    
+    # 一个 Order 可关联多个运单，按创建时间倒序返回
+    logistics_list = (
+        db.query(LogisticsTracking)
+        .filter(LogisticsTracking.order_id == order_id)
+        .order_by(LogisticsTracking.created_at.desc(), LogisticsTracking.id.desc())
+        .all()
+    )
+
+    # 为每个 item 回填 processing_batch_code + seed_batch_code
+    # ProcessingBatch 可再 JOIN SeedBatch 兜底
+    from app.models.processing import ProcessingBatch
+    from app.models.seed import SeedBatch
+
+    def _pb_and_sb(pb_id: Optional[int]):
+        if not pb_id:
+            return None, None, None
+        pb = db.query(ProcessingBatch).filter(ProcessingBatch.id == pb_id).first()
+        if not pb:
+            return None, None, None
+        sb_code = getattr(pb, "seed_batch_code", None)
+        sb_id = getattr(pb, "seed_batch_id", None)
+        if not sb_code and sb_id:
+            sb = db.query(SeedBatch).filter(SeedBatch.id == sb_id).first()
+            sb_code = sb.batch_code if sb else None
+        return pb.batch_code, sb_code, pb.product_name
+
+    items_list = []
+    for item in items:
+        pb_code, sb_code, product_name = _pb_and_sb(item.processing_batch_id)
+        # OrderItem 行内 seed_batch_code 优先级最高 (add_order_item 写入的)
+        effective_sb = item.seed_batch_code or sb_code
+        effective_pb = item.batch_code or pb_code
+        items_list.append({
+            "id": item.id,
+            "item_code": item.item_code,
+            "item_name": item.item_name,
+            "batch_code": effective_pb,
+            "processing_batch_code": effective_pb,
+            "processing_batch_id": item.processing_batch_id,
+            "seed_batch_code": effective_sb,   # 前端溯源按钮按此字段 navigate
+            "product_name": product_name,
+            "quantity": item.quantity,
+            "unit": item.unit,
+            "unit_price": item.unit_price,
+            "amount": item.amount,
+            "product_grade": item.product_grade,
+            "traceability_qr_code": getattr(item, "traceability_qr_code", None),
+            "created_at": item.created_at.isoformat() if getattr(item, "created_at", None) else None,
+        })
+
+    customer_name = order.customer.name if order.customer else None
+    logistics_resp = [
+        {
+            "id": lg.id,
+            "tracking_no": lg.tracking_no,
+            "carrier": lg.carrier,
+            "vehicle_no": getattr(lg, "vehicle_no", None),
+            "driver_name": lg.driver_name,
+            "driver_phone": getattr(lg, "driver_phone", None),
+            "status": lg.status,
+            "origin": lg.origin,
+            "destination": lg.destination,
+            "departure_time": lg.departure_time.isoformat() if lg.departure_time else None,
+            "estimated_arrival_time": lg.estimated_arrival_time.isoformat() if lg.estimated_arrival_time else None,
+            "current_location": lg.current_location,
+            "signer": lg.signer,
+            "sign_time": lg.sign_time.isoformat() if lg.sign_time else None,
+            "remarks": getattr(lg, "remarks", None),
+            "created_at": lg.created_at.isoformat() if getattr(lg, "created_at", None) else None,
+            "updated_at": lg.updated_at.isoformat() if getattr(lg, "updated_at", None) else None,
+        }
+        for lg in logistics_list
+    ]
+
     return {
         "id": order.id,
         "order_no": order.order_no,
         "customer_id": order.customer_id,
+        "customer_name": customer_name,
         "order_date": order.order_date.isoformat() if order.order_date else None,
         "delivery_date": order.delivery_date.isoformat() if order.delivery_date else None,
         "status": order.status,
@@ -167,37 +357,95 @@ async def get_order_detail(
         "shipping_address": order.shipping_address,
         "shipping_method": order.shipping_method,
         "remarks": order.remarks,
-        "items": [
-            {
-                "id": item.id,
-                "item_code": item.item_code,
-                "item_name": item.item_name,
-                "batch_code": item.batch_code,
-                "processing_batch_id": item.processing_batch_id,
-                "quantity": item.quantity,
-                "unit": item.unit,
-                "unit_price": item.unit_price,
-                "amount": item.amount,
-                "product_grade": item.product_grade,
-            }
-            for item in items
-        ],
-        "logistics": {
-            "id": logistics.id,
-            "tracking_no": logistics.tracking_no,
-            "carrier": logistics.carrier,
-            "vehicle_no": logistics.vehicle_no,
-            "driver_name": logistics.driver_name,
-            "driver_phone": logistics.driver_phone,
-            "status": logistics.status,
-            "origin": logistics.origin,
-            "destination": logistics.destination,
-            "departure_time": logistics.departure_time.isoformat() if logistics.departure_time else None,
-            "estimated_arrival_time": logistics.estimated_arrival_time.isoformat() if logistics.estimated_arrival_time else None,
-            "current_location": logistics.current_location,
-            "signer": logistics.signer,
-            "sign_time": logistics.sign_time.isoformat() if logistics.sign_time else None,
-        } if logistics else None,
+        "created_at": order.created_at.isoformat() if order.created_at else None,
+        "updated_at": order.updated_at.isoformat() if order.updated_at else None,
+        "items": items_list,
+        # 保持 logistics=第一条 + 新增 logistics_list 全量
+        "logistics": logistics_resp[0] if logistics_resp else None,
+        "logistics_list": logistics_resp,
+    }
+
+
+@router.post("/orders/{order_id}/items")
+async def add_order_item(
+    order_id: int,
+    request: Request,
+    item_data: OrderItemCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """为订单添加商品明细，并同步生成溯源二维码写入 traceability_qr_code 字段。
+
+    二维码 payload 为可被手机浏览器直接打开的 URL：/trace/public?batch=<batch_code>，
+    消费者扫码即可跳转至公开溯源页，无需登录。
+    生成失败时仅记录 warning，不阻断主流程（参考 processing.py L41-67 容错范式）。
+    """
+    await require_permission("sales:manage", current_user, db)
+
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    # 确定用于溯源二维码的批次编码：优先加工批次编码，其次种子批次编码
+    trace_batch_code = item_data.batch_code or item_data.seed_batch_code
+
+    qr_data_uri = None
+    if trace_batch_code:
+        try:
+            forwarded_scheme = request.headers.get("X-Forwarded-Proto") or request.url.scheme
+            forwarded_host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host")
+            qr_result = generate_trace_qrcode(
+                trace_batch_code,
+                item_data.seed_batch_code or trace_batch_code,
+                request_host=forwarded_host,
+                request_scheme=forwarded_scheme,
+                mode='public',
+            )
+            qr_data_uri = qr_result.get('qrcode')
+        except Exception as e:
+            logger.warning("生成订单商品溯源二维码失败 order_id=%s batch=%s: %s", order_id, trace_batch_code, e)
+            qr_data_uri = None
+
+    # 计算金额 = 数量 × 单价（若提供单价）
+    amount = None
+    if item_data.unit_price is not None:
+        amount = round(item_data.quantity * item_data.unit_price, 2)
+
+    order_item = OrderItem(
+        order_id=order_id,
+        item_code=item_data.item_code,
+        item_name=item_data.item_name,
+        batch_code=item_data.batch_code,
+        seed_batch_code=item_data.seed_batch_code,
+        processing_batch_id=item_data.processing_batch_id,
+        quantity=item_data.quantity,
+        unit=item_data.unit,
+        unit_price=item_data.unit_price,
+        amount=amount,
+        product_grade=item_data.product_grade,
+        traceability_qr_code=qr_data_uri,
+    )
+    db.add(order_item)
+
+    # 同步更新订单总金额（累加商品金额）
+    if amount is not None:
+        order.total_amount = (order.total_amount or 0) + amount
+        order.updated_at = now_cn_naive()
+
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error("添加订单商品失败 order_id=%s: %s", order_id, e)
+        raise HTTPException(status_code=500, detail="添加订单商品失败")
+    db.refresh(order_item)
+
+    return {
+        "message": "Order item added successfully",
+        "item_id": order_item.id,
+        "traceability_qr_code": qr_data_uri,
+        "amount": amount,
+        "total_amount": order.total_amount,
     }
 
 
@@ -210,19 +458,161 @@ async def update_order_status(
 ):
     await require_permission("sales:manage", current_user, db)
 
-    status = data.get("status")
-    if not status:
+    new_status = data.get("status")
+    if not new_status:
         raise HTTPException(status_code=400, detail="状态为必填项")
+
+    if new_status not in VALID_ORDER_STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"订单状态非法,允许值: {sorted(VALID_ORDER_STATUSES)}",
+        )
 
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    order.status = status
-    order.updated_at = datetime.now()
-    db.commit()
+    old_status = order.status
+    if order.status == new_status:
+        return {"message": "Order status unchanged", "status": new_status}
 
-    return {"message": "Order status updated successfully", "status": status}
+    # 单向守卫: 防止 completed -> pending 非法回退
+    cur_priority = ORDER_STATUS_PRIORITY.get(order.status, 0)
+    new_priority = ORDER_STATUS_PRIORITY.get(new_status, 0)
+    if new_priority < cur_priority and new_status not in ("cancelled", "refunded"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"订单状态不能从 {order.status} 回退到 {new_status}",
+        )
+
+    order.status = new_status
+    order.updated_at = now_cn_naive()
+
+    # 自动同步支付状态
+    if new_status == 'paid' and order.payment_status != 'paid':
+        order.payment_status = 'paid'
+    elif new_status == 'cancelled' and order.payment_status == 'paid':
+        order.payment_status = 'refund_pending'
+    elif new_status == 'refunded':
+        order.payment_status = 'refunded'
+
+    try:
+        db.commit()
+        db.refresh(order)
+    except Exception as e:
+        db.rollback()
+        logger.exception("更新订单状态失败 order_id=%s status=%s: %s", order_id, new_status, e)
+        raise HTTPException(status_code=500, detail="更新订单状态失败")
+
+    # 推送订单状态变更通知
+    try:
+        from app.utils.notifications_helper import (
+            notify_order_status_changed, notify_order_cancelled
+        )
+        operator = current_user.username if current_user else None
+        if new_status == "cancelled":
+            customer_name = order.customer.name if order.customer else None
+            notify_order_cancelled(db, order.order_no, customer_name, operator)
+        else:
+            notify_order_status_changed(db, order.order_no, old_status, new_status, operator)
+        db.commit()
+    except Exception as e:
+        logger.warning("订单状态通知失败 order_id=%s: %s", order_id, e)
+        db.rollback()
+
+    return {"message": "Order status updated successfully", "status": new_status}
+
+
+def _deduct_inventory_for_order(
+    db: Session,
+    order: Order,
+    operator_name: str,
+    tracking_ref: str,
+):
+    """发货扣减库存: 对 Order 中每个 item (有 processing_batch_id 或 batch_code) 找库存出库,并写入 InventoryTransaction.
+
+    库存不足时抛 HTTPException(409), 调用方负责 rollback.
+    """
+    from app.models.inventory import InventoryItem, InventoryTransaction
+
+    items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
+    low_stock_alerts = []
+    stock_out_alerts = []
+    for it in items:
+        qty = float(it.quantity or 0)
+        if qty <= 0 or not (it.processing_batch_id or it.batch_code or it.seed_batch_code):
+            continue
+
+        q = db.query(InventoryItem)
+        if it.processing_batch_id:
+            q = q.filter(InventoryItem.processing_batch_id == it.processing_batch_id)
+        elif it.batch_code:
+            q = q.filter(InventoryItem.batch_code == it.batch_code)
+        else:
+            q = q.filter(InventoryItem.seed_batch_code == it.seed_batch_code)
+        inv = q.first()
+        if not inv:
+            logger.warning(
+                "发货扣库存未找到对应库存项 order_id=%s processing_batch_id=%s batch=%s seed=%s",
+                order.id, it.processing_batch_id, it.batch_code, it.seed_batch_code,
+            )
+            continue
+
+        available = float(inv.quantity or 0)
+        if available < qty:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"库存不足: 商品 {it.item_name or inv.item_name} "
+                    f"现有 {available}{it.unit or inv.unit or ''}, 需要 {qty}"
+                ),
+            )
+
+        old_qty = inv.quantity
+        inv.quantity = round(available - qty, 4)
+        unit = it.unit or inv.unit or 'kg'
+        item_code = it.item_code or inv.item_code or ''
+        item_name = it.item_name or inv.item_name or ''
+
+        if inv.quantity <= 0:
+            inv.status = "out_of_stock"
+            stock_out_alerts.append((item_code, item_name, unit))
+        elif inv.min_stock is not None and inv.quantity <= float(inv.min_stock):
+            inv.status = "low_stock"
+            low_stock_alerts.append((item_code, item_name, inv.quantity, inv.min_stock, unit))
+        inv.updated_at = now_cn_naive()
+
+        tx = InventoryTransaction(
+            item_id=inv.id,
+            transaction_type="out",
+            quantity=qty,
+            unit=unit,
+            unit_price=float(it.unit_price) if it.unit_price is not None else inv.unit_price,
+            total_amount=float(it.amount) if it.amount is not None else (
+                round(qty * (inv.unit_price or 0), 2)
+            ),
+            transaction_date=now_cn_naive(),
+            operator=operator_name,
+            source_document="sales_order",
+            source_document_no=(order.order_no or "") + (f"|{tracking_ref}" if tracking_ref else ""),
+            remarks=f"订单发货自动扣库存 order_id={order.id}" + (f" tracking={tracking_ref}" if tracking_ref else ""),
+        )
+        db.add(tx)
+
+    # 发送库存变动通知（不阻塞主事务）
+    if low_stock_alerts or stock_out_alerts:
+        try:
+            from app.utils.notifications_helper import (
+                notify_inventory_low_stock, notify_stock_out
+            )
+            for code, name, qty, threshold, unit in low_stock_alerts:
+                notify_inventory_low_stock(db, code, name, qty, threshold, unit)
+            for code, name, unit in stock_out_alerts:
+                notify_stock_out(db, code, name, unit)
+            db.commit()
+        except Exception as e:
+            logger.warning("库存预警通知失败 order_id=%s: %s", order.id, e)
+            db.rollback()
 
 
 @router.post("/orders/{order_id}/logistics")
@@ -232,22 +622,108 @@ async def add_logistics(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    await require_permission("sales:manage", current_user, db)
-    
+    await require_permission("logistics:manage", current_user, db)
+
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    
-    logistics = LogisticsTracking(order_id=order_id, **logistics_data.dict())
+
+    payload = logistics_data.dict()
+    # 兼容 license_plate 字段，统一映射到 vehicle_no
+    if "vehicle_no" not in payload or not payload["vehicle_no"]:
+        payload["vehicle_no"] = payload.pop("license_plate", None) or payload.get("vehicle_no")
+    if not payload.get("vehicle_no") and "license_plate" in logistics_data.__fields_set__:
+        pass
+
+    req_status = payload.get("status") or "pending"
+    if req_status not in VALID_LOGISTICS_STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"物流状态非法,允许值: {sorted(VALID_LOGISTICS_STATUSES)}",
+        )
+    payload["status"] = req_status
+
+    if req_status in {"delivered", "signed", "completed"} and not payload.get("sign_time"):
+        payload["sign_time"] = now_cn_naive()
+
+    logistics = LogisticsTracking(order_id=order_id, **{k: v for k, v in payload.items() if hasattr(LogisticsTracking, k)})
+    if not logistics.tracking_no:
+        raise HTTPException(status_code=422, detail="运单号 tracking_no 必填")
     db.add(logistics)
 
-    order.status = "shipped"
-    order.updated_at = datetime.now()
+    first_order_status = LOGISTICS_STATUS_TO_ORDER.get(req_status)
+    if first_order_status:
+        _apply_order_status_forward(order, first_order_status)
 
-    db.commit()
-    db.refresh(logistics)
+    if req_status in {"in_transit", "arrived", "delivered", "signed", "completed"}:
+        _deduct_inventory_for_order(db, order, current_user.username, logistics.tracking_no)
+
+    try:
+        db.commit()
+        db.refresh(logistics)
+        db.refresh(order)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("创建物流单失败 order_id=%s tracking=%s: %s", order_id, payload.get("tracking_no"), e)
+        raise HTTPException(status_code=500, detail="创建物流单失败")
+
+    # 推送物流单创建通知
+    try:
+        from app.utils.notifications_helper import notify_logistics_created
+        operator = current_user.username if current_user else None
+        notify_logistics_created(
+            db,
+            tracking_no=logistics.tracking_no,
+            order_no=order.order_no,
+            carrier=logistics.carrier,
+            operator=operator,
+        )
+        db.commit()
+    except Exception as e:
+        logger.warning("物流创建通知失败 tracking=%s: %s", logistics.tracking_no, e)
+        db.rollback()
+
+    # 若订单状态有变化,同时推送订单状态通知
+    try:
+        from app.utils.notifications_helper import notify_order_status_changed
+        if order.status != "pending":
+            notify_order_status_changed(
+                db, order.order_no, "pending", order.status,
+                current_user.username if current_user else None,
+            )
+            db.commit()
+    except Exception as e:
+        logger.warning("订单状态通知失败 order=%s: %s", order.order_no, e)
+        db.rollback()
 
     return {"message": "Logistics tracking added successfully", "logistics_id": logistics.id}
+
+
+def _apply_order_status_forward(order: Order, target_status: str) -> None:
+    """推进订单状态,强制经过合法流程（pending→paid→shipped→completed）。
+
+    cancelled / refunded 可由任意状态直接进入。
+    """
+    if not target_status:
+        return
+
+    if target_status in ("cancelled", "refunded"):
+        order.status = target_status
+        order.updated_at = now_cn_naive()
+        return
+
+    if order.status == target_status:
+        return
+
+    cur_idx = ORDER_STATUS_FLOW.index(order.status) if order.status in ORDER_STATUS_FLOW else -1
+    new_idx = ORDER_STATUS_FLOW.index(target_status) if target_status in ORDER_STATUS_FLOW else -1
+
+    if new_idx > cur_idx:
+        order.status = target_status
+        order.updated_at = now_cn_naive()
 
 
 @router.put("/logistics/{logistics_id}")
@@ -257,46 +733,183 @@ async def update_logistics(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    await require_permission("sales:manage", current_user, db)
-    
+    await require_permission("logistics:manage", current_user, db)
+
     logistics = db.query(LogisticsTracking).filter(LogisticsTracking.id == logistics_id).first()
     if not logistics:
         raise HTTPException(status_code=404, detail="Logistics tracking not found")
-    
+
     order = db.query(Order).filter(Order.id == logistics.order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    
-    allowed_fields = ['status', 'current_location', 'license_plate', 'driver_name', 'driver_phone']
+
+    old_logistics_status = logistics.status
+    old_order_status = order.status
+
+    allowed_fields = [
+        "status", "current_location",
+        "vehicle_no", "driver_name", "driver_phone",
+        "carrier", "origin", "destination",
+        "departure_time", "estimated_arrival_time",
+        "signer", "sign_time", "remarks",
+        "transit_records", "temperature_records", "gps_records",
+    ]
+
+    new_status = logistics.status
+    if "status" in logistics_data:
+        new_status = logistics_data.get("status")
+        if new_status is not None and new_status not in VALID_LOGISTICS_STATUSES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"物流状态非法,允许值: {sorted(VALID_LOGISTICS_STATUSES)}",
+            )
+
     for key, value in logistics_data.items():
+        if key == "license_plate":
+            key, value = "vehicle_no", value
         if key in allowed_fields:
+            if key in {"departure_time", "estimated_arrival_time", "sign_time"} and value is not None:
+                if isinstance(value, str):
+                    try:
+                        value = datetime.fromisoformat(value)
+                    except ValueError:
+                        raise HTTPException(status_code=422, detail=f"{key} 必须为 ISO8601 格式")
+                value = _safe_cn_dt(value)
+            if key in {"transit_records", "temperature_records", "gps_records"} and value is not None and not isinstance(value, str):
+                import json as _json
+                try:
+                    value = _json.dumps(value, ensure_ascii=False)
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=422, detail=f"{key} JSON 序列化失败")
             setattr(logistics, key, value)
-    
-    logistics.updated_at = datetime.now()
-    
-    status_mapping = {
-        "pending": "pending",
-        "shipped": "shipped",
-        "transit": "shipped",
-        "arrived": "shipped",
-        "delivered": "completed",
-    }
-    
-    new_status = status_mapping.get(logistics.status)
-    if new_status and order.status != new_status:
-        status_priority = {"pending": 1, "shipped": 2, "completed": 3}
-        current_priority = status_priority.get(order.status, 0)
-        new_priority = status_priority.get(new_status, 0)
-        
-        if new_priority >= current_priority:
-            order.status = new_status
-            order.updated_at = datetime.now()
-        else:
-            raise HTTPException(status_code=400, detail=f"订单状态不能从 {order.status} 回退到 {new_status}")
-    
-    db.commit()
-    
+
+    logistics.updated_at = now_cn_naive()
+
+    if new_status in {"delivered", "signed", "completed"} and logistics.sign_time is None:
+        logistics.sign_time = now_cn_naive()
+        if not logistics.signer and getattr(current_user, "username", None):
+            logistics.signer = current_user.username
+
+    target_order_status = LOGISTICS_STATUS_TO_ORDER.get(new_status)
+    if target_order_status:
+        cur_idx = ORDER_STATUS_FLOW.index(order.status) if order.status in ORDER_STATUS_FLOW else -1
+        new_idx = ORDER_STATUS_FLOW.index(target_order_status) if target_order_status in ORDER_STATUS_FLOW else -1
+
+        if target_order_status in ("cancelled", "refunded"):
+            if order.status not in ("cancelled", "refunded"):
+                order.status = target_order_status
+                order.updated_at = now_cn_naive()
+        elif new_idx != -1 and cur_idx != -1:
+            if new_idx < cur_idx:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"订单状态不能从 {order.status} 回退到 {target_order_status}",
+                )
+            if new_idx > cur_idx:
+                order.status = target_order_status
+                order.updated_at = now_cn_naive()
+
+    shipping_statuses = {"in_transit", "arrived", "delivered", "signed", "completed"}
+    was_shipped = old_order_status in {"shipped", "completed"}
+    if new_status in shipping_statuses and not was_shipped:
+        _deduct_inventory_for_order(db, order, current_user.username, logistics.tracking_no)
+
+    try:
+        db.commit()
+        db.refresh(logistics)
+        db.refresh(order)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("更新物流单失败 logistics_id=%s: %s", logistics_id, e)
+        raise HTTPException(status_code=500, detail="更新物流单失败")
+
+    # 推送物流状态变更通知
+    operator = current_user.username if current_user else None
+    try:
+        from app.utils.notifications_helper import (
+            notify_logistics_status_changed, notify_order_status_changed
+        )
+        if new_status != old_logistics_status:
+            notify_logistics_status_changed(
+                db,
+                tracking_no=logistics.tracking_no,
+                order_no=order.order_no,
+                old_status=old_logistics_status,
+                new_status=new_status,
+                current_location=logistics.current_location,
+                operator=operator,
+            )
+        if order.status != old_order_status and old_order_status not in ("cancelled", "refunded"):
+            notify_order_status_changed(
+                db, order.order_no, old_order_status, order.status, operator,
+            )
+        db.commit()
+    except Exception as e:
+        logger.warning("物流状态通知失败 logistics_id=%s: %s", logistics_id, e)
+        db.rollback()
+
     return {"message": "Logistics tracking updated successfully"}
+
+
+@router.get("/logistics")
+async def list_logistics(
+    tracking_no: str | None = None,
+    carrier: str | None = None,
+    status: str | None = None,
+    order_id: int | None = None,
+    page: int = 1,
+    page_size: int = 50,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """物流运输全局列表视图（SalesManage 第 3 Tab 数据源，权限 logistics:query）。"""
+    await require_permission("logistics:query", current_user, db)
+
+    query = db.query(LogisticsTracking)
+    if tracking_no:
+        query = query.filter(LogisticsTracking.tracking_no.like(f"%{tracking_no}%"))
+    if carrier:
+        query = query.filter(LogisticsTracking.carrier.like(f"%{carrier}%"))
+    if status:
+        query = query.filter(LogisticsTracking.status == status)
+    if order_id:
+        query = query.filter(LogisticsTracking.order_id == order_id)
+
+    total = query.count()
+    rows = query.order_by(LogisticsTracking.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    return {
+        "status": "success",
+        "count": total,
+        "page": page,
+        "page_size": page_size,
+        "data": [
+            {
+                "id": r.id,
+                "order_id": r.order_id,
+                "order_no": r.order.order_no if (r.order_id and r.order) else None,
+                "customer_id": (r.order.customer_id) if (r.order_id and r.order) else None,
+                "customer_name": (r.order.customer.name) if (r.order_id and r.order and r.order.customer) else None,
+                "tracking_no": r.tracking_no,
+                "carrier": r.carrier,
+                "vehicle_no": getattr(r, "vehicle_no", None),
+                "driver_name": r.driver_name,
+                "driver_phone": getattr(r, "driver_phone", None),
+                "status": r.status,
+                "origin": r.origin,
+                "destination": r.destination,
+                "departure_time": r.departure_time.isoformat() if r.departure_time else None,
+                "estimated_arrival_time": r.estimated_arrival_time.isoformat() if r.estimated_arrival_time else None,
+                "current_location": r.current_location,
+                "remarks": getattr(r, "remarks", None),
+                "created_at": r.created_at.isoformat() if getattr(r, "created_at", None) else None,
+                "updated_at": r.updated_at.isoformat() if getattr(r, "updated_at", None) else None,
+            }
+            for r in rows
+        ],
+    }
 
 
 async def _build_trace_data(batch_code: str, db: Session) -> dict:
@@ -314,7 +927,14 @@ async def _build_trace_data(batch_code: str, db: Session) -> dict:
 
     supplier = db.query(SeedSupplier).filter(SeedSupplier.id == seed_batch.supplier_id).first()
 
-    planting_records = db.query(PlantingRecord).filter(PlantingRecord.batch_id == seed_batch.id).all()
+    # 关联条件统一：同时兼容 batch_id(FK) 和 seed_batch_code(字符串) 两种写法
+    planting_records = db.query(PlantingRecord).filter(
+        or_(
+            PlantingRecord.batch_id == seed_batch.id,
+            PlantingRecord.seed_batch_code == batch_code,
+        )
+    ).all()
+    plot_ids = [pr.plot_id for pr in planting_records]
 
     trace_data = {
         "seed_batch": {
@@ -338,10 +958,25 @@ async def _build_trace_data(batch_code: str, db: Session) -> dict:
 
     for record in planting_records:
         plot = db.query(Plot).filter(Plot.id == record.plot_id).first()
-        activities = db.query(FarmingActivity).filter(FarmingActivity.plot_id == record.plot_id).all()
-        env_data = db.query(EnvironmentalData).filter(EnvironmentalData.plot_id == record.plot_id).order_by(EnvironmentalData.record_time.desc()).limit(10).all()
+        activities = db.query(FarmingActivity).filter(
+            or_(
+                FarmingActivity.plot_id == record.plot_id,
+                FarmingActivity.seed_batch_code == batch_code,
+            )
+        ).all()
+        env_data = db.query(EnvironmentalData).filter(
+            or_(
+                EnvironmentalData.plot_id == record.plot_id,
+                EnvironmentalData.seed_batch_code == batch_code,
+            )
+        ).order_by(EnvironmentalData.record_time.desc()).limit(10).all()
 
-        applications = db.query(PesticideApplication).filter(PesticideApplication.plot_id == record.plot_id).all()
+        applications = db.query(PesticideApplication).filter(
+            or_(
+                PesticideApplication.plot_id == record.plot_id,
+                PesticideApplication.seed_batch_code == batch_code,
+            )
+        ).all()
 
         trace_data["planting"].append({
             "plot_code": plot.plot_code if plot else None,
@@ -394,7 +1029,22 @@ async def _build_trace_data(batch_code: str, db: Session) -> dict:
                 "is_compliant": app.is_compliant,
             })
 
-    inspections = db.query(InspectionReport).filter(InspectionReport.batch_id == seed_batch.id).all()
+    processing_batches = db.query(ProcessingBatch).filter(
+        or_(
+            ProcessingBatch.seed_batch_id == seed_batch.id,
+            ProcessingBatch.seed_batch_code == batch_code,
+        )
+    ).all()
+    processing_batch_ids = [pb.id for pb in processing_batches]
+
+    inspections = db.query(InspectionReport).filter(
+        or_(
+            InspectionReport.batch_id == seed_batch.id,
+            InspectionReport.seed_batch_code == batch_code,
+            InspectionReport.processing_batch_id.in_(processing_batch_ids) if processing_batch_ids else False,
+            InspectionReport.plot_id.in_(plot_ids) if plot_ids else False,
+        )
+    ).all()
     for insp in inspections:
         residues = db.query(PesticideResidueTest).filter(PesticideResidueTest.report_id == insp.id).all()
         trace_data["inspections"].append({
@@ -416,7 +1066,6 @@ async def _build_trace_data(batch_code: str, db: Session) -> dict:
             ],
         })
 
-    processing_batches = db.query(ProcessingBatch).filter(ProcessingBatch.seed_batch_id == seed_batch.id).all()
     for pb in processing_batches:
         records = db.query(ProcessingRecord).filter(ProcessingRecord.batch_id == pb.id).all()
         trace_data["processing"].append({
@@ -441,8 +1090,10 @@ async def _build_trace_data(batch_code: str, db: Session) -> dict:
     processing_batch_codes = [pb.batch_code for pb in processing_batches]
 
     inventory_items = db.query(InventoryItem).filter(
-        InventoryItem.batch_code.in_(processing_batch_codes) |
-        (InventoryItem.seed_batch_code == seed_batch.batch_code)
+        or_(
+            InventoryItem.seed_batch_code == seed_batch.batch_code,
+            InventoryItem.batch_code.in_(processing_batch_codes) if processing_batch_codes else False,
+        )
     ).all()
     for item in inventory_items:
         trace_data["inventory"].append({
@@ -454,8 +1105,10 @@ async def _build_trace_data(batch_code: str, db: Session) -> dict:
         })
 
     order_items = db.query(OrderItem).filter(
-        OrderItem.batch_code.in_(processing_batch_codes) |
-        (OrderItem.seed_batch_code == batch_code)
+        or_(
+            OrderItem.seed_batch_code == batch_code,
+            OrderItem.batch_code.in_(processing_batch_codes) if processing_batch_codes else False,
+        )
     ).all()
     for oi in order_items:
         order = db.query(Order).filter(Order.id == oi.order_id).first()

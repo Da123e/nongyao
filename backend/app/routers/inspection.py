@@ -1,15 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy.orm import Session
 from datetime import datetime
+from app.core.timezone import now_cn_naive
 import hashlib
 import io
+import base64
 import qrcode
 import os
 import platform
 import logging
 
 from app.core.database import get_db
+from app.core.config import settings
+from app.core.qrcode_generator import generate_trace_qrcode
 from app.models.inspection import InspectionReport, PesticideResidueTest
 from app.models.seed import SeedBatch, SeedSupplier
 from app.models.processing import ProcessingBatch
@@ -122,8 +126,8 @@ async def create_report(
         certificate_no=data.certificate_no,
         is_qualified=data.is_qualified,
         remarks=data.remarks,
-        file_hash=generate_hash(f"{data.report_code}{datetime.now()}"),
-        blockchain_hash=generate_hash(f"{data.report_code}{data.report_type}{datetime.now()}"),
+        file_hash=generate_hash(f"{data.report_code}{now_cn_naive()}"),
+        blockchain_hash=generate_hash(f"{data.report_code}{data.report_type}{now_cn_naive()}"),
     )
     db.add(report)
     db.commit()
@@ -140,7 +144,8 @@ async def create_report(
         )
         db.commit()
     except Exception as e:
-        logging.getLogger(__name__).warning(f"notify_inspection_report failed: {e}")
+        db.rollback()
+        logger.warning("notify_inspection_report failed: %s", e)
 
     return {"status": "success", "data": report}
 
@@ -238,12 +243,18 @@ async def create_residue_test(
         test_method=data.get("test_method"),
     )
     db.add(test)
-    db.commit()
-    db.refresh(test)
 
+    # 若超标，同步将报告置为不合格 — 与检测项写入同一次事务，保证一致性
     if is_over_limit:
         report.is_qualified = False
+
+    try:
         db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error("残留检测项入库失败 report=%s: %s", report_code, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="残留检测项入库失败")
+    db.refresh(test)
 
     return {"status": "success", "data": test}
 
@@ -319,6 +330,7 @@ async def trace_by_batch(
 @router.get("/trace/{batch_code}/pdf")
 async def export_trace_pdf(
     batch_code: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
@@ -541,14 +553,24 @@ async def export_trace_pdf(
         elements.append(Spacer(1, 20))
     
     elements.append(Spacer(1, 30))
-    elements.append(Paragraph(f"生成日期：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", normal_style))
+    elements.append(Paragraph(f"生成日期：{now_cn_naive().strftime('%Y-%m-%d %H:%M:%S')}", normal_style))
     
-    qr_content = f"https://peanut-chain.com/trace/{batch_code}"
-    qr_img = qrcode.make(qr_content)
-    qr_buffer = io.BytesIO()
-    qr_img.save(qr_buffer, format='PNG')
+    # 复用 generate_trace_qrcode：扫码指向消费者公开页 /trace/public，URL 前缀从 request 反推
+    forwarded_scheme = request.headers.get("X-Forwarded-Proto") or request.url.scheme
+    forwarded_host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host")
+    qr_result = generate_trace_qrcode(
+        batch_code,
+        batch_code,
+        request_host=forwarded_host,
+        request_scheme=forwarded_scheme,
+        mode='public',
+    )
+    # data URI → bytes → reportlab Image
+    qr_data_uri = qr_result.get('qrcode', '')
+    qr_b64 = qr_data_uri.split(',', 1)[1] if ',' in qr_data_uri else ''
+    qr_buffer = io.BytesIO(base64.b64decode(qr_b64)) if qr_b64 else io.BytesIO()
     qr_buffer.seek(0)
-    
+
     qr_image = Image(qr_buffer, width=80, height=80)
     qr_table = Table([[qr_image, Paragraph("扫码查询完整溯源信息", normal_style)]], colWidths=[100, 250])
     elements.append(qr_table)
@@ -556,8 +578,12 @@ async def export_trace_pdf(
     doc.build(elements)
     buffer.seek(0)
     
-    return FileResponse(
-        buffer,
+    filename = f"{batch_code}_质量追溯报告.pdf"
+    # RFC 5987 encoding for non-ASCII filenames
+    from urllib.parse import quote
+    encoded_filename = quote(filename)
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
         media_type='application/pdf',
-        filename=f'{batch_code}_质量追溯报告.pdf',
+        headers={'Content-Disposition': f'attachment; filename="{encoded_filename}"; filename*=UTF-8\'\'{encoded_filename}'}
     )

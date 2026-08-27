@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Foreig
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.core.database import Base
+from app.core.timezone import now_cn_default
 
 
 class Customer(Base):
@@ -18,8 +19,8 @@ class Customer(Base):
     credit_limit = Column(Float)
     credit_balance = Column(Float)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
+    updated_at = Column(DateTime, default=now_cn_default, onupdate=now_cn_default)
 
     orders = relationship("Order", back_populates="customer")
 
@@ -30,7 +31,7 @@ class Order(Base):
     id = Column(Integer, primary_key=True, index=True)
     order_no = Column(String(50), unique=True, index=True, nullable=False)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
-    order_date = Column(DateTime, default=datetime.now, index=True)
+    order_date = Column(DateTime, default=now_cn_default, index=True)
     delivery_date = Column(DateTime)
     status = Column(String(20), default="pending", index=True)
     total_amount = Column(Float)
@@ -43,8 +44,8 @@ class Order(Base):
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
     is_on_chain = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
+    updated_at = Column(DateTime, default=now_cn_default, onupdate=now_cn_default)
 
     customer = relationship("Customer", back_populates="orders")
     items = relationship("OrderItem", back_populates="order")
@@ -66,8 +67,8 @@ class OrderItem(Base):
     unit_price = Column(Float)
     amount = Column(Float)
     product_grade = Column(String(20))
-    traceability_qr_code = Column(String(255))
-    created_at = Column(DateTime, default=datetime.now)
+    traceability_qr_code = Column(Text)
+    created_at = Column(DateTime, default=now_cn_default)
 
     order = relationship("Order", back_populates="items")
 
@@ -93,11 +94,12 @@ class LogisticsTracking(Base):
     transit_records = Column(Text)
     signer = Column(String(50))
     sign_time = Column(DateTime)
+    remarks = Column(Text)
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
     is_on_chain = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
+    updated_at = Column(DateTime, default=now_cn_default, onupdate=now_cn_default)
 
     order = relationship("Order", back_populates="logistics")
 
@@ -110,13 +112,13 @@ class SalesRecord(Base):
     seed_batch_code = Column(String(50), nullable=False, index=True)
     processing_batch_code = Column(String(50), index=True)
     store_name = Column(String(100), index=True)
-    sale_date = Column(DateTime, default=datetime.now, index=True)
+    sale_date = Column(DateTime, default=now_cn_default, index=True)
     sale_quantity = Column(Float)
     sale_unit = Column(String(20))
     sale_amount = Column(Float)
     blockchain_hash = Column(String(64), index=True)
     ipfs_hash = Column(String(64), index=True)
     is_on_chain = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn_default)
 
     order = relationship("Order")

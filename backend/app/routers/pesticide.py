@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
+from app.core.timezone import now_cn_naive
 import hashlib
 import logging
 from app.core.database import get_db
@@ -119,7 +120,7 @@ async def create_purchase(
         invoice_no=data.get("invoice_no"),
         storage_location=data.get("storage_location"),
         receiver=data.get("receiver"),
-        blockchain_hash=generate_hash(f"{pesticide_code}{quantity}{datetime.now()}"),
+        blockchain_hash=generate_hash(f"{pesticide_code}{quantity}{now_cn_naive()}"),
     )
     db.add(purchase)
     db.commit()
@@ -182,7 +183,7 @@ async def create_application(
 
     safety_interval_end = None
     if pesticide.safety_interval:
-        safety_interval_end = datetime.now() + timedelta(days=pesticide.safety_interval)
+        safety_interval_end = now_cn_naive() + timedelta(days=pesticide.safety_interval)
 
     application = PesticideApplication(
         plot_id=plot.id,
@@ -259,7 +260,7 @@ async def create_application(
                 is_on_chain=True,
                 uploaded_by=current_user.id,
                 uploader_type=current_user.organization_type or "user",
-                uploaded_at=datetime.now()
+                uploaded_at=now_cn_naive()
             )
             db.add(blockchain_record)
             db.commit()

@@ -143,6 +143,35 @@ export function Login({ onLogin }: LoginProps) {
               </motion.div>
             </motion.form>
 
+            <div className="mt-5">
+              <p className="text-xs text-gray-500 mb-2 font-medium tracking-wide">📋 演示账号（点击即可自动填入）：</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {[
+                  { role: '管理员', roleKey: 'admin', user: 'admin', pwd: 'admin123', accent: 'from-purple-50 to-violet-50 border-purple-200 text-purple-700' },
+                  { role: '种植户', roleKey: 'farmer', user: 'farmer', pwd: 'farmer123', accent: 'from-green-50 to-emerald-50 border-green-200 text-green-700' },
+                  { role: '质检员', roleKey: 'inspector', user: 'inspector', pwd: 'inspector123', accent: 'from-blue-50 to-indigo-50 border-blue-200 text-blue-700' },
+                  { role: '仓储常务管理员', roleKey: 'warehouse_manager', user: 'warehouse', pwd: 'warehouse123', accent: 'from-cyan-50 to-sky-50 border-cyan-200 text-cyan-700' },
+                  { role: '售货员', roleKey: 'salesperson', user: 'sales', pwd: 'sales123', accent: 'from-pink-50 to-rose-50 border-pink-200 text-pink-700' },
+                ].map((d) => (
+                  <button
+                    key={d.roleKey}
+                    type="button"
+                    onClick={() => {
+                      setUsername(d.user);
+                      setPassword(d.pwd);
+                    }}
+                    className={`group text-left px-3 py-2.5 rounded-xl border bg-gradient-to-br ${d.accent} hover:shadow-sm hover:-translate-y-0.5 transition-all duration-200`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-semibold">{d.role}</span>
+                      <svg className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+                    </div>
+                    <div className="mt-0.5 text-[11px] opacity-80 font-mono">{d.user} / {d.pwd}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="mt-6 pt-6 border-t border-gray-100">
               <div className="grid grid-cols-3 gap-3 text-center">
                 <div className="flex flex-col items-center gap-1.5 p-3 bg-green-50 rounded-xl">

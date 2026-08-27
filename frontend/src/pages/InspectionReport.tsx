@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Plus, Search, FileText, CheckCircle, XCircle, Eye, X, Link2 } from 'lucide-react';
 import { api, seedApi } from '../services/api';
 import type { SeedBatch } from '../types';
 import { BatchChainView } from '../components/BatchChainView';
 import { canCreateInspection } from '../utils/roles';
+import { formatDateTimeCn } from '../utils/date';
 
 const batchColors = [
   'bg-green-500',
@@ -21,9 +23,22 @@ const getBatchBgColor = (index: number) => getBatchColor(index).replace('500', '
 const getBatchTextColor = (index: number) => getBatchColor(index).replace('500', '700');
 
 const formatBatchName = (batchCode: string) => {
-  const match = batchCode.match(/(\d{4})-(\d{3})/);
-  if (match) {
-    return `批次${match[2]}`;
+  // 格式 1: PB2026-001 / HB2026-003 等 「字母前缀 + YYYY-NNN」
+  const pbMatch = batchCode.match(/([A-Z]{1,4})?(\d{4})-(\d{3})/);
+  if (pbMatch) {
+    return `批次${pbMatch[3]}`;
+  }
+  // 格式 2: BATCH-001 / SD-007 / 任意前缀-NNN
+  const dashNum = batchCode.match(/-(\d{1,5})$/);
+  if (dashNum) {
+    return `批次${dashNum[1].padStart(3, '0')}`;
+  }
+  // 格式 3: PB20260818001 / 尾部纯数字 3+ 位
+  const tailNum = batchCode.match(/(\d{3,6})$/);
+  if (tailNum) {
+    const num = tailNum[1];
+    const short = num.length > 3 ? num.slice(-3) : num;
+    return `批次${short.padStart(3, '0')}`;
   }
   return batchCode;
 };
@@ -59,13 +74,18 @@ export function InspectionReport() {
   const [showModal, setShowModal] = useState(false);
   const [formData, setFormData] = useState<any>({});
   const [seedBatches, setSeedBatches] = useState<SeedBatch[]>([]);
+  const [plantingRecords, setPlantingRecords] = useState<any[]>([]);
+  const [plots, setPlots] = useState<any[]>([]);
   const [showChainView, setShowChainView] = useState(false);
   const [selectedBatchCode, setSelectedBatchCode] = useState('');
   const [selectedSeedBatchCode, setSelectedSeedBatchCode] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
     fetchReports();
     fetchSeedBatches();
+    fetchPlantingRecords();
+    fetchPlots();
   }, []);
 
   useEffect(() => {
@@ -94,6 +114,32 @@ export function InspectionReport() {
     }
   };
 
+  const fetchPlantingRecords = async () => {
+    try {
+      const res = await api.get('/planting/planting-records');
+      setPlantingRecords(res.data.data || []);
+    } catch (err) {
+      console.error('Failed to fetch planting records:', err);
+    }
+  };
+
+  const fetchPlots = async () => {
+    try {
+      const res = await api.get('/planting/plots');
+      setPlots(res.data.data || []);
+    } catch (err) {
+      console.error('Failed to fetch plots:', err);
+    }
+  };
+
+  const getPlotForSeedBatch = (seedBatchCode: string) => {
+    const record = plantingRecords.find(r => r.seed_batch_code === seedBatchCode && r.status === 'growing');
+    if (record) {
+      return plots.find(p => p.id === record.plot_id);
+    }
+    return null;
+  };
+
   const viewReportDetail = async (report: InspectionReportData) => {
     setSelectedReport(report);
     try {
@@ -110,6 +156,22 @@ export function InspectionReport() {
     setShowModal(true);
   };
 
+  // 从首页快捷卡跳转带 ?action=xxx 参数时自动打开对应弹窗
+  useEffect(() => {
+    const action = searchParams.get('action');
+    if (action === 'new') {
+      handleAddReport();
+    } else if (action === 'residue') {
+      setFormData({ report_type: '农药残留检测' });
+      setShowModal(true);
+    }
+    if (action) {
+      searchParams.delete('action');
+      setSearchParams(searchParams, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (formData.is_qualified === undefined) {
@@ -122,6 +184,8 @@ export function InspectionReport() {
       fetchReports();
     } catch (err: any) {
       console.error('Failed to create report:', err);
+      const errorMsg = err?.response?.data?.detail || '添加失败，请稍后重试';
+      alert(errorMsg);
     }
   };
 
@@ -209,17 +273,19 @@ export function InspectionReport() {
                         {report.seed_batch_code ? (
                           <div className="flex items-center gap-2">
                             <div className={`w-2 h-2 rounded-full ${getBatchColor(colorIndex)}`}></div>
-                            <span className={`text-sm font-medium ${getBatchTextColor(colorIndex)}`}>
+                            <span
+                              className={`text-sm font-medium ${getBatchTextColor(colorIndex)}`}
+                              title={report.seed_batch_code}
+                            >
                               {formatBatchName(report.seed_batch_code)}
                             </span>
-                            <span className="text-xs text-gray-400">{report.seed_batch_code}</span>
                           </div>
                         ) : (
                           <span className="text-sm text-gray-400">-</span>
                         )}
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-800">{report.report_type}</td>
-                      <td className="px-6 py-4 text-sm text-gray-600">{new Date(report.report_date).toLocaleString()}</td>
+                      <td className="px-6 py-4 text-sm text-gray-600">{formatDateTimeCn(report.report_date)}</td>
                       <td className="px-6 py-4 text-sm text-gray-600">{report.inspector}</td>
                       <td className="px-6 py-4 text-sm text-gray-600">{report.inspection_agency}</td>
                       <td className="px-6 py-4">
@@ -239,7 +305,12 @@ export function InspectionReport() {
                         <div className="flex items-center justify-end gap-3">
                           {report.seed_batch_code && (
                             <button
-                              onClick={() => { setSelectedBatchCode(report.seed_batch_code!); setShowChainView(true); }}
+                              onClick={() => {
+                                const cleanCode = (report.seed_batch_code || '').trim();
+                                if (!cleanCode) return;
+                                setSelectedBatchCode(cleanCode);
+                                setShowChainView(true);
+                              }}
                               className={`flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-opacity-80 ${getBatchBgColor(colorIndex)} ${getBatchTextColor(colorIndex)}`}
                               title="查看全链条溯源"
                             >
@@ -289,7 +360,7 @@ export function InspectionReport() {
             </div>
             <div className="p-4 bg-gray-50 rounded-lg">
               <p className="text-sm text-gray-500">检测日期</p>
-              <p className="font-medium text-gray-800">{new Date(selectedReport.report_date).toLocaleString()}</p>
+              <p className="font-medium text-gray-800">{formatDateTimeCn(selectedReport.report_date)}</p>
             </div>
             <div className="p-4 bg-gray-50 rounded-lg">
               <p className="text-sm text-gray-500">检测员</p>
@@ -430,14 +501,47 @@ export function InspectionReport() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">种子批次</label>
                 <select
                   value={formData.batch_code || ''}
-                  onChange={(e) => setFormData({ ...formData, batch_code: e.target.value })}
+                  onChange={(e) => {
+                    const batchCode = e.target.value;
+                    const plot = getPlotForSeedBatch(batchCode);
+                    setFormData({ 
+                      ...formData, 
+                      batch_code: batchCode,
+                      plot_code: plot?.plot_code || formData.plot_code || '',
+                    });
+                  }}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
                 >
                   <option value="">请选择种子批次（可选）</option>
                   {seedBatches.map((batch) => (
-                    <option key={batch.id} value={batch.batch_code}>{formatBatchName(batch.batch_code)} - {batch.variety_name}</option>
+                    <option key={batch.id} value={batch.batch_code}>
+                      {formatBatchName(batch.batch_code)} - {batch.variety_name}
+                      {getPlotForSeedBatch(batch.batch_code) ? ` (${getPlotForSeedBatch(batch.batch_code)?.plot_code})` : ''}
+                    </option>
                   ))}
                 </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">关联地块</label>
+                {formData.batch_code && getPlotForSeedBatch(formData.batch_code) ? (
+                  <div className="px-4 py-3 bg-green-50 border border-green-200 rounded-lg">
+                    <div className="text-sm text-green-700">
+                      {getPlotForSeedBatch(formData.batch_code)?.plot_code} - {getPlotForSeedBatch(formData.batch_code)?.name}
+                    </div>
+                    <div className="text-xs text-green-600 mt-1">（根据种子批次自动关联）</div>
+                  </div>
+                ) : (
+                  <select
+                    value={formData.plot_code || ''}
+                    onChange={(e) => setFormData({ ...formData, plot_code: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                  >
+                    <option value="">请选择地块（可选）</option>
+                    {plots.map((plot) => (
+                      <option key={plot.id} value={plot.plot_code}>{plot.plot_code} - {plot.name}</option>
+                    ))}
+                  </select>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">报告类型</label>

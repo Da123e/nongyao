@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Plus, Eye, MapPin, Thermometer, Droplets, X, Package, Link2, Search, RefreshCw, Activity, Sun, Wind, Beaker } from 'lucide-react';
 import { api, seedApi } from '../services/api';
 import { BatchChainView } from '../components/BatchChainView';
@@ -112,6 +113,7 @@ export function PlantingManage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [wsConnected, setWsConnected] = useState(false);
   const [isRealtime, setIsRealtime] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
   const wsRef = useRef<WebSocket | null>(null);
   const isRealtimeRef = useRef(isRealtime);
 
@@ -550,6 +552,23 @@ export function PlantingManage() {
     setModalType('planting');
   };
 
+  // 从首页快捷卡跳转带 ?action=xxx 参数时自动打开对应弹窗
+  useEffect(() => {
+    const action = searchParams.get('action');
+    if (action === 'new') {
+      setActiveTab('planting');
+      handleAddPlantingRecord();
+    } else if (action === 'plot') {
+      setActiveTab('plots');
+      handleAddPlot();
+    }
+    if (action) {
+      searchParams.delete('action');
+      setSearchParams(searchParams, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -562,9 +581,10 @@ export function PlantingManage() {
         setShowModal(false);
         fetchPlantingRecords();
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to create:', err);
-      alert('添加失败，请稍后重试');
+      const errorMsg = err?.response?.data?.detail || '添加失败，请稍后重试';
+      alert(errorMsg);
     }
   };
 
