@@ -324,15 +324,16 @@ mysql -u root -p -e "CREATE DATABASE nongyao CHARACTER SET utf8mb4 COLLATE utf8m
 # 3. 安装后端依赖并配置环境变量
 cd backend
 pip install -r requirements.txt
-# 创建 backend/.env 并填写实际配置：
+# 创建 backend/.env 并填写实际配置（可直接复制 backend/.env.example）：
 # DATABASE_URL=mysql+pymysql://root:你的MySQL密码@localhost:3306/nongyao?charset=utf8mb4
 # SECRET_KEY=请设置足够长且随机的安全密钥
 # DEBUG=True
-# BLOCKCHAIN_ENABLED=True
+# BLOCKCHAIN_ENABLED=True   （未安装 Ganache 或无需上链时改为 False，自动降级为本地存证）
 # GANACHE_URL=http://localhost:7545
-# IPFS_ENABLED=True
+# IPFS_ENABLED=True         （未安装 IPFS Kubo 时改为 False，否则带文件上链接口会报错）
+# IPFS_API_URL=http://localhost:5001/api/v0
 
-# 4. 启动后端（首次启动自动建表、插入 RBAC 种子数据、启动 Ganache/IPFS 连接器）
+# 4. 启动后端（首次启动自动建表、插入 RBAC 种子数据、自动拉起 Ganache；IPFS 二进制缺失时跳过）
 python main.py
 
 # 5. 新开终端，启动前端
