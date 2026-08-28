@@ -360,28 +360,51 @@ async def export_trace_pdf(
     from app.models.processing import ProcessingBatch, ProcessingRecord
     from app.models.inventory import InventoryItem
     from app.models.sales import OrderItem, Order
-    
+    from app.models.blockchain import BlockchainRecord
+
     seed_batch = db.query(SeedBatch).filter(SeedBatch.batch_code == batch_code).first()
     if not seed_batch:
         raise HTTPException(status_code=404, detail="批次不存在")
-    
+
     supplier = db.query(SeedSupplier).filter(SeedSupplier.id == seed_batch.supplier_id).first()
     planting_records = db.query(PlantingRecord).filter(PlantingRecord.batch_id == seed_batch.id).all()
-    
+    plot_ids = [r.plot_id for r in planting_records]
+    processing_batches = db.query(ProcessingBatch).filter(ProcessingBatch.seed_batch_id == seed_batch.id).all()
+    processing_batch_ids = [pb.id for pb in processing_batches]
+    processing_batch_codes = [pb.batch_code for pb in processing_batches]
+
+    # 区块链存证摘要（按批次反查）
+    blockchain_records = db.query(BlockchainRecord).filter(
+        (BlockchainRecord.seed_batch_code == batch_code) |
+        (BlockchainRecord.batch_id == batch_code) |
+        (BlockchainRecord.seed_batch_id == str(seed_batch.id))
+    ).order_by(BlockchainRecord.uploaded_at.desc()).all()
+    on_chain_count = sum(1 for r in blockchain_records if r.is_on_chain)
+
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=50, leftMargin=50, topMargin=50, bottomMargin=30)
     styles = getSampleStyleSheet()
-    
+
     elements = []
-    
+
     title_style = ParagraphStyle(
         'Title',
         parent=styles['Heading1'],
         fontName=cjk_font_name,
-        fontSize=18,
+        fontSize=20,
+        alignment=1,
+        spaceAfter=10,
+        textColor=colors.darkgreen,
+    )
+
+    subtitle_style = ParagraphStyle(
+        'Subtitle',
+        parent=styles['Normal'],
+        fontName=cjk_font_name,
+        fontSize=12,
         alignment=1,
         spaceAfter=20,
-        textColor=colors.darkblue,
+        textColor=colors.gray,
     )
 
     sub_title_style = ParagraphStyle(
@@ -400,162 +423,347 @@ async def export_trace_pdf(
         fontSize=10,
         leading=16,
     )
-    
+
+    small_style = ParagraphStyle(
+        'Small',
+        parent=styles['Normal'],
+        fontName=cjk_font_name,
+        fontSize=9,
+        leading=14,
+        textColor=colors.gray,
+    )
+
+    # ===== 报告头部 =====
     elements.append(Paragraph("金生链 · 花生全产业链溯源平台", title_style))
-    elements.append(Paragraph("质量追溯报告", title_style))
-    elements.append(Spacer(1, 20))
-    
-    elements.append(Paragraph("一、种子溯源信息", sub_title_style))
-    seed_data = [
-        ["批次编号", seed_batch.batch_code],
-        ["品种名称", seed_batch.variety_name],
-        ["繁育基地", seed_batch.breeding_base],
-        ["供货企业", supplier.name if supplier else ""],
-        ["生产日期", seed_batch.production_date.strftime("%Y-%m-%d") if seed_batch.production_date else ""],
-        ["净含量", f"{seed_batch.net_weight} kg"],
-        ["发芽率", f"{seed_batch.germination_rate}%"],
-        ["纯度", f"{seed_batch.purity}%"],
-        ["状态", seed_batch.status],
+    elements.append(Paragraph("质量追溯报告", subtitle_style))
+
+    header_data = [
+        ["批次编号", batch_code, "报告生成时间", now_cn_naive().strftime("%Y-%m-%d %H:%M:%S")],
+        ["品种名称", seed_batch.variety_name or "-", "状态", seed_batch.status or "-"],
     ]
-    
-    seed_table = Table(seed_data, colWidths=[120, 300])
-    seed_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgreen),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+    header_table = Table(header_data, colWidths=[90, 180, 90, 120])
+    header_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f0fdf4')),
+        ('BACKGROUND', (2, 0), (2, -1), colors.HexColor('#f0fdf4')),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
         ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
         ('FONTNAME', (0, 0), (-1, -1), cjk_font_name),
         ('FONTSIZE', (0, 0), (-1, -1), 10),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-        ('GRID', (0, 0), (-1, -1), 1, colors.gray),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.gray),
+    ]))
+    elements.append(header_table)
+    elements.append(Spacer(1, 20))
+
+    # ===== 区块链存证摘要 =====
+    if blockchain_records:
+        elements.append(Paragraph("区块链存证摘要", sub_title_style))
+        chain_summary = [
+            ["已存证环节数", str(len(blockchain_records))],
+            ["已上链记录数", str(on_chain_count)],
+            ["最近存证时间", (blockchain_records[0].uploaded_at.strftime("%Y-%m-%d %H:%M:%S") if blockchain_records[0].uploaded_at else "-")],
+            ["最近数据哈希", (blockchain_records[0].data_hash[:16] + "..." if blockchain_records[0].data_hash else "-")],
+        ]
+        chain_table = Table(chain_summary, colWidths=[120, 300])
+        chain_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f0fdf4')),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, -1), cjk_font_name),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.gray),
+        ]))
+        elements.append(chain_table)
+        elements.append(Spacer(1, 16))
+
+    # ===== 一、种子溯源信息 =====
+    elements.append(Paragraph("一、种子溯源信息", sub_title_style))
+    seed_data = [
+        ["批次编号", seed_batch.batch_code],
+        ["品种名称", seed_batch.variety_name or "-"],
+        ["繁育基地", seed_batch.breeding_base or "-"],
+        ["供货企业", supplier.name if supplier else "-"],
+        ["生产日期", seed_batch.production_date.strftime("%Y-%m-%d") if seed_batch.production_date else "-"],
+        ["净含量", f"{seed_batch.net_weight} kg" if seed_batch.net_weight is not None else "-"],
+        ["发芽率", f"{seed_batch.germination_rate}%" if seed_batch.germination_rate is not None else "-"],
+        ["纯度", f"{seed_batch.purity}%" if seed_batch.purity is not None else "-"],
+        ["状态", seed_batch.status or "-"],
+    ]
+    seed_table = Table(seed_data, colWidths=[120, 300])
+    seed_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f0fdf4')),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, -1), cjk_font_name),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.gray),
     ]))
     elements.append(seed_table)
     elements.append(Spacer(1, 20))
-    
+
+    # ===== 二、种植管理信息 =====
     if planting_records:
-        elements.append(Paragraph("二、种植信息", sub_title_style))
-        
+        elements.append(Paragraph("二、种植管理信息", sub_title_style))
+
         for record in planting_records:
             plot = db.query(Plot).filter(Plot.id == record.plot_id).first()
-            activities = db.query(FarmingActivity).filter(FarmingActivity.plot_id == record.plot_id).all()
-            applications = db.query(PesticideApplication).filter(PesticideApplication.plot_id == record.plot_id).all()
-            
-            elements.append(Paragraph(f"地块：{plot.plot_code} - {plot.name}", normal_style))
-            elements.append(Paragraph(f"位置：{plot.location}", normal_style))
-            elements.append(Paragraph(f"种植日期：{record.planting_date.strftime('%Y-%m-%d') if record.planting_date else ''}", normal_style))
-            elements.append(Paragraph(f"种植户：{record.farmer}", normal_style))
-            
+            activities = db.query(FarmingActivity).filter(
+                FarmingActivity.plot_id == record.plot_id,
+                FarmingActivity.seed_batch_code == batch_code,
+            ).all() if record.plot_id else []
+            env_data = db.query(EnvironmentalData).filter(
+                EnvironmentalData.plot_id == record.plot_id,
+                EnvironmentalData.seed_batch_code == batch_code,
+            ).order_by(EnvironmentalData.record_time.desc()).limit(5).all() if record.plot_id else []
+
+            plot_info = [
+                ["地块编码", plot.plot_code if plot else "-", "地块名称", plot.name if plot else "-"],
+                ["位置", plot.location if plot else "-", "种植户", record.farmer or "-"],
+                ["种植日期", record.planting_date.strftime("%Y-%m-%d") if record.planting_date else "-", "预计采收", record.expected_harvest_date.strftime("%Y-%m-%d") if record.expected_harvest_date else "-"],
+            ]
+            plot_table = Table(plot_info, colWidths=[90, 150, 90, 150])
+            plot_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f0fdf4')),
+                ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, -1), cjk_font_name),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.gray),
+            ]))
+            elements.append(plot_table)
+            elements.append(Spacer(1, 8))
+
             if activities:
-                elements.append(Paragraph("农事活动记录：", normal_style))
+                elements.append(Paragraph("农事活动记录", normal_style))
                 for activity in activities:
-                    elements.append(Paragraph(f"- {activity.activity_date.strftime('%Y-%m-%d') if activity.activity_date else ''}：{activity.activity_type} - {activity.description}", normal_style))
-            
-            if applications:
-                elements.append(Paragraph("农药使用记录：", normal_style))
-                for app in applications:
-                    pesticide = db.query(Pesticide).filter(Pesticide.id == app.pesticide_id).first()
-                    elements.append(Paragraph(f"- {app.application_date.strftime('%Y-%m-%d') if app.application_date else ''}：{pesticide.name if pesticide else ''} - 用量：{app.dosage} {app.unit}", normal_style))
-            
-            elements.append(Spacer(1, 15))
-    
-    processing_batches = db.query(ProcessingBatch).filter(ProcessingBatch.seed_batch_id == seed_batch.id).all()
-    if processing_batches:
-        elements.append(Paragraph("三、加工信息", sub_title_style))
-        
-        for pb in processing_batches:
-            records = db.query(ProcessingRecord).filter(ProcessingRecord.batch_id == pb.id).all()
-            
-            elements.append(Paragraph(f"加工批次：{pb.batch_code}", normal_style))
-            elements.append(Paragraph(f"产品名称：{pb.product_name}", normal_style))
-            elements.append(Paragraph(f"产品等级：{pb.product_grade}", normal_style))
-            elements.append(Paragraph(f"加工日期：{pb.processing_date.strftime('%Y-%m-%d') if pb.processing_date else ''}", normal_style))
-            
-            if records:
-                elements.append(Paragraph("加工工序：", normal_style))
-                for pr in records:
-                    elements.append(Paragraph(f"- {pr.process_name} ({pr.process_order}序)", normal_style))
-            
-            elements.append(Spacer(1, 15))
-    
-    inspections = db.query(InspectionReport).filter(InspectionReport.batch_id == seed_batch.id).all()
+                    elements.append(Paragraph(
+                        f"• {activity.activity_date.strftime('%Y-%m-%d') if activity.activity_date else '-'}：{activity.activity_type} - {activity.description or '-'}",
+                        small_style
+                    ))
+                elements.append(Spacer(1, 6))
+
+            if env_data:
+                elements.append(Paragraph("最近环境监测数据", normal_style))
+                env_headers = ["时间", "空气温(°C)", "空气湿(%)", "土壤温(°C)", "土壤湿(%)", "pH"]
+                env_rows = [env_headers]
+                for e in env_data:
+                    env_rows.append([
+                        e.record_time.strftime("%m-%d %H:%M") if e.record_time else "-",
+                        f"{e.temperature:.1f}" if e.temperature is not None else "-",
+                        f"{e.humidity:.1f}" if e.humidity is not None else "-",
+                        f"{e.soil_temperature:.1f}" if e.soil_temperature is not None else "-",
+                        f"{e.soil_moisture:.1f}" if e.soil_moisture is not None else "-",
+                        f"{e.ph_value:.1f}" if e.ph_value is not None else "-",
+                    ])
+                env_table = Table(env_rows, colWidths=[80, 60, 60, 60, 60, 50])
+                env_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f0fdf4')),
+                    ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('FONTNAME', (0, 0), (-1, -1), cjk_font_name),
+                    ('FONTSIZE', (0, 0), (-1, -1), 8),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.gray),
+                ]))
+                elements.append(env_table)
+
+            elements.append(Spacer(1, 14))
+
+    # ===== 三、农药使用记录 =====
+    pesticide_applications = db.query(PesticideApplication).filter(
+        PesticideApplication.seed_batch_code == batch_code
+    ).all() if planting_records else []
+    if not pesticide_applications and plot_ids:
+        pesticide_applications = db.query(PesticideApplication).filter(
+            PesticideApplication.plot_id.in_(plot_ids)
+        ).all()
+
+    if pesticide_applications:
+        elements.append(Paragraph("三、农药使用记录", sub_title_style))
+        app_data = [["农药名称", "品牌", "登记证号", "施用日期", "施用量", "单位", "施药人", "合规性"]]
+        for app in pesticide_applications:
+            pesticide = db.query(Pesticide).filter(Pesticide.id == app.pesticide_id).first()
+            app_data.append([
+                pesticide.name if pesticide else "-",
+                pesticide.brand if pesticide else "-",
+                pesticide.registration_no if pesticide else "-",
+                app.application_date.strftime("%Y-%m-%d") if app.application_date else "-",
+                str(app.dosage) if app.dosage is not None else "-",
+                app.unit or "-",
+                app.applicator or "-",
+                "合规" if app.is_compliant else "不合规",
+            ])
+        app_table = Table(app_data, colWidths=[80, 70, 80, 65, 45, 35, 55, 45])
+        app_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#eff6ff')),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, -1), cjk_font_name),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.gray),
+        ]))
+        elements.append(app_table)
+        elements.append(Spacer(1, 20))
+
+    # ===== 四、检测报告 =====
+    inspections = db.query(InspectionReport).filter(
+        (InspectionReport.batch_id == seed_batch.id) |
+        (InspectionReport.seed_batch_code == batch_code) |
+        (InspectionReport.processing_batch_id.in_(processing_batch_ids) if processing_batch_ids else False)
+    ).all()
     if inspections:
         elements.append(Paragraph("四、检测报告", sub_title_style))
-        
+
         for insp in inspections:
             elements.append(Paragraph(f"报告编号：{insp.report_code}", normal_style))
-            elements.append(Paragraph(f"检测类型：{insp.report_type}", normal_style))
-            elements.append(Paragraph(f"检测机构：{insp.inspection_agency}", normal_style))
-            elements.append(Paragraph(f"检测结果：{'合格' if insp.is_qualified else '不合格'}", normal_style))
-            elements.append(Spacer(1, 10))
-    
-    processing_batch_codes = [pb.batch_code for pb in processing_batches]
-    
+            insp_info = [
+                ["检测类型", insp.report_type or "-", "检测机构", insp.inspection_agency or "-"],
+                ["检测日期", insp.report_date.strftime("%Y-%m-%d") if insp.report_date else "-", "检测员", insp.inspector or "-"],
+                ["检测结果", "合格" if insp.is_qualified else "不合格", "", ""],
+            ]
+            insp_table = Table(insp_info, colWidths=[90, 150, 90, 150])
+            insp_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#faf5ff')),
+                ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, -1), cjk_font_name),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.gray),
+            ]))
+            elements.append(insp_table)
+
+            residues = db.query(PesticideResidueTest).filter(PesticideResidueTest.report_id == insp.id).all()
+            if residues:
+                elements.append(Paragraph("农药残留检测结果", small_style))
+                res_data = [["检测项目", "限量值", "实测值", "单位", "判定"]]
+                for r in residues:
+                    res_data.append([
+                        r.test_item or "-",
+                        str(r.limit_value) if r.limit_value is not None else "-",
+                        str(r.measured_value) if r.measured_value is not None else "-",
+                        r.unit or "-",
+                        "超标" if r.is_over_limit else "合格",
+                    ])
+                res_table = Table(res_data, colWidths=[120, 80, 80, 60, 80])
+                res_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#faf5ff')),
+                    ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('FONTNAME', (0, 0), (-1, -1), cjk_font_name),
+                    ('FONTSIZE', (0, 0), (-1, -1), 9),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.gray),
+                ]))
+                elements.append(res_table)
+            elements.append(Spacer(1, 14))
+
+    # ===== 五、加工生产信息 =====
+    if processing_batches:
+        elements.append(Paragraph("五、加工生产信息", sub_title_style))
+
+        for pb in processing_batches:
+            records = db.query(ProcessingRecord).filter(ProcessingRecord.batch_id == pb.id).all()
+
+            pb_info = [
+                ["加工批次", pb.batch_code, "产品名称", pb.product_name or "-"],
+                ["产品等级", pb.product_grade or "-", "加工日期", pb.processing_date.strftime("%Y-%m-%d") if pb.processing_date else "-"],
+                ["状态", pb.status or "-", "", ""],
+            ]
+            pb_table = Table(pb_info, colWidths=[90, 150, 90, 150])
+            pb_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#fff7ed')),
+                ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, -1), cjk_font_name),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.gray),
+            ]))
+            elements.append(pb_table)
+
+            if records:
+                elements.append(Paragraph("加工工序", normal_style))
+                for pr in sorted(records, key=lambda x: x.process_order or 0):
+                    elements.append(Paragraph(
+                        f"• 第{pr.process_order}序：{pr.process_name}（操作人：{pr.operator or '-'}，时间：{pr.start_time.strftime('%Y-%m-%d %H:%M') if pr.start_time else '-'} ~ {pr.end_time.strftime('%Y-%m-%d %H:%M') if pr.end_time else '-'}）",
+                        small_style
+                    ))
+            elements.append(Spacer(1, 14))
+
+    # ===== 六、仓储物流信息 =====
     inventory_items = db.query(InventoryItem).filter(
         InventoryItem.batch_code.in_(processing_batch_codes) |
         (InventoryItem.seed_batch_code == seed_batch.batch_code)
     ).all()
     if inventory_items:
-        elements.append(Paragraph("五、库存信息", sub_title_style))
-        
+        elements.append(Paragraph("六、仓储物流信息", sub_title_style))
+
         inv_data = [["商品编码", "商品名称", "数量", "单位", "状态"]]
         for item in inventory_items:
             inv_data.append([
-                item.item_code,
-                item.item_name,
-                str(item.quantity),
-                item.unit,
-                item.status,
+                item.item_code or "-",
+                item.item_name or "-",
+                str(item.quantity) if item.quantity is not None else "-",
+                item.unit or "-",
+                item.status or "-",
             ])
-        
-        inv_table = Table(inv_data, colWidths=[100, 120, 80, 60, 80])
+        inv_table = Table(inv_data, colWidths=[100, 140, 70, 60, 80])
         inv_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ecfeff')),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, -1), cjk_font_name),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 1, colors.gray),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.gray),
         ]))
         elements.append(inv_table)
         elements.append(Spacer(1, 20))
-    
+
+    # ===== 七、终端销售信息 =====
     order_items = db.query(OrderItem).filter(
         OrderItem.batch_code.in_(processing_batch_codes) |
         (OrderItem.seed_batch_code == batch_code)
     ).all()
     if order_items:
-        elements.append(Paragraph("六、销售信息", sub_title_style))
-        
-        sales_data = [["订单编号", "商品名称", "数量", "单位", "单价", "订单日期", "状态"]]
+        elements.append(Paragraph("七、终端销售信息", sub_title_style))
+
+        sales_data = [["订单编号", "商品名称", "数量", "单位", "单价(¥)", "订单日期", "状态"]]
         for oi in order_items:
             order = db.query(Order).filter(Order.id == oi.order_id).first()
             sales_data.append([
-                order.order_no if order else "",
-                oi.item_name,
-                str(oi.quantity),
-                oi.unit,
-                str(oi.unit_price),
-                order.order_date.strftime("%Y-%m-%d") if order and order.order_date else "",
-                order.status if order else "",
+                order.order_no if order else "-",
+                oi.item_name or "-",
+                str(oi.quantity) if oi.quantity is not None else "-",
+                oi.unit or "-",
+                f"{oi.unit_price:.2f}" if oi.unit_price is not None else "-",
+                order.order_date.strftime("%Y-%m-%d") if order and order.order_date else "-",
+                order.status if order else "-",
             ])
-        
-        sales_table = Table(sales_data, colWidths=[100, 100, 60, 60, 60, 100, 60])
+        sales_table = Table(sales_data, colWidths=[90, 110, 45, 45, 60, 80, 60])
         sales_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.lightpink),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#fdf2f8')),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, -1), cjk_font_name),
             ('FONTSIZE', (0, 0), (-1, -1), 9),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ('GRID', (0, 0), (-1, -1), 1, colors.gray),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.gray),
         ]))
         elements.append(sales_table)
         elements.append(Spacer(1, 20))
-    
-    elements.append(Spacer(1, 30))
-    elements.append(Paragraph(f"生成日期：{now_cn_naive().strftime('%Y-%m-%d %H:%M:%S')}", normal_style))
-    
-    # 复用 generate_trace_qrcode：扫码指向消费者公开页 /trace/public，URL 前缀从 request 反推
+
+    # ===== 底部：生成信息与二维码 =====
+    elements.append(Spacer(1, 20))
+    elements.append(Paragraph("本报告由金生链溯源平台自动生成，数据来源于区块链存证与企业上报信息，仅供溯源参考。", small_style))
+
     forwarded_scheme = request.headers.get("X-Forwarded-Proto") or request.url.scheme
     forwarded_host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host")
     qr_result = generate_trace_qrcode(
@@ -565,21 +773,25 @@ async def export_trace_pdf(
         request_scheme=forwarded_scheme,
         mode='public',
     )
-    # data URI → bytes → reportlab Image
     qr_data_uri = qr_result.get('qrcode', '')
     qr_b64 = qr_data_uri.split(',', 1)[1] if ',' in qr_data_uri else ''
     qr_buffer = io.BytesIO(base64.b64decode(qr_b64)) if qr_b64 else io.BytesIO()
     qr_buffer.seek(0)
 
     qr_image = Image(qr_buffer, width=80, height=80)
-    qr_table = Table([[qr_image, Paragraph("扫码查询完整溯源信息", normal_style)]], colWidths=[100, 250])
+    qr_para = Paragraph("扫描二维码查询完整溯源信息", normal_style)
+    qr_sub = Paragraph("金生链 · 花生全产业链溯源平台", small_style)
+    qr_table = Table(
+        [[qr_image, qr_para], ['', qr_sub]],
+        colWidths=[100, 250]
+    )
+    elements.append(Spacer(1, 10))
     elements.append(qr_table)
-    
+
     doc.build(elements)
     buffer.seek(0)
-    
+
     filename = f"{batch_code}_质量追溯报告.pdf"
-    # RFC 5987 encoding for non-ASCII filenames
     from urllib.parse import quote
     encoded_filename = quote(filename)
     return StreamingResponse(

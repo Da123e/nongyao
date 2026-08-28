@@ -336,7 +336,7 @@ export function TraceQuery({ publicMode = false }: { publicMode?: boolean }) {
   const stageConfig: Record<string, { label: string; icon: any; color: string; bg: string }> = {
     seed: { label: '种子溯源', icon: Wheat, color: 'text-green-600', bg: 'bg-green-500' },
     planting: { label: '种植管理', icon: Leaf, color: 'text-emerald-600', bg: 'bg-emerald-500' },
-    pesticide: { label: '农药检测', icon: FlaskConical, color: 'text-blue-600', bg: 'bg-blue-500' },
+    pesticide: { label: '农药使用', icon: FlaskConical, color: 'text-blue-600', bg: 'bg-blue-500' },
     inspection: { label: '检测报告', icon: FileText, color: 'text-purple-600', bg: 'bg-purple-500' },
     processing: { label: '加工生产', icon: Factory, color: 'text-orange-600', bg: 'bg-orange-500' },
     inventory: { label: '仓储物流', icon: Package, color: 'text-cyan-600', bg: 'bg-cyan-500' },
@@ -674,7 +674,7 @@ export function TraceQuery({ publicMode = false }: { publicMode?: boolean }) {
 
       {traceData && (
         <div className="space-y-6">
-          {canExportTracePdf() && (
+          {!publicMode && canExportTracePdf() && (
             <div className="flex items-center justify-end">
               <button
                 onClick={downloadTracePdf}
@@ -774,7 +774,7 @@ export function TraceQuery({ publicMode = false }: { publicMode?: boolean }) {
                 <div className="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center">
                   <Leaf className="w-5 h-5 text-emerald-600" />
                 </div>
-                <h3 className="text-lg font-semibold text-gray-800">阶段二：种植信息</h3>
+                <h3 className="text-lg font-semibold text-gray-800">阶段二：种植管理信息</h3>
               </div>
               <div className="space-y-4">
                 {traceData.planting.map((p, idx) => (
@@ -1019,7 +1019,7 @@ export function TraceQuery({ publicMode = false }: { publicMode?: boolean }) {
                 <div className="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center">
                   <Factory className="w-5 h-5 text-orange-600" />
                 </div>
-                <h3 className="text-lg font-semibold text-gray-800">阶段五：加工信息</h3>
+                <h3 className="text-lg font-semibold text-gray-800">阶段五：加工生产信息</h3>
               </div>
               <div className="space-y-4">
                 {traceData.processing.map((p, idx) => (
@@ -1075,7 +1075,7 @@ export function TraceQuery({ publicMode = false }: { publicMode?: boolean }) {
                 <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
                   <Package className="w-5 h-5 text-indigo-600" />
                 </div>
-                <h3 className="text-lg font-semibold text-gray-800">阶段六：库存信息</h3>
+                <h3 className="text-lg font-semibold text-gray-800">阶段六：仓储物流信息</h3>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full">
@@ -1114,7 +1114,7 @@ export function TraceQuery({ publicMode = false }: { publicMode?: boolean }) {
                 <div className="w-10 h-10 bg-pink-100 rounded-lg flex items-center justify-center">
                   <ShoppingCart className="w-5 h-5 text-pink-600" />
                 </div>
-                <h3 className="text-lg font-semibold text-gray-800">阶段七：销售信息</h3>
+                <h3 className="text-lg font-semibold text-gray-800">阶段七：终端销售信息</h3>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full">
