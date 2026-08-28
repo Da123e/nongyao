@@ -10,6 +10,7 @@ import qrcode
 import os
 import platform
 import logging
+import re
 
 from app.core.database import get_db
 from app.core.config import settings
@@ -362,6 +363,20 @@ async def export_trace_pdf(
     from app.models.sales import OrderItem, Order
     from app.models.blockchain import BlockchainRecord
 
+    # 状态中文映射，避免 PDF 中出现英文裸值
+    STATUS_LABELS = {
+        # 种子批次
+        'stocked': '库存中', 'sold': '已销售', 'used': '已使用', 'returned': '已退回',
+        # 加工
+        'completed': '已完成', 'in_progress': '进行中', 'pending': '待加工', 'cancelled': '已取消',
+        # 库存
+        'in_stock': '在库', 'out_of_stock': '缺货', 'reserved': '已预留', 'damaged': '已损坏',
+        # 订单
+        'pending': '待处理', 'processing': '处理中', 'shipped': '已发货', 'completed': '已完成',
+    }
+    def fmt_status(status: str | None, default='-') -> str:
+        return STATUS_LABELS.get(status, status or default)
+
     seed_batch = db.query(SeedBatch).filter(SeedBatch.batch_code == batch_code).first()
     if not seed_batch:
         raise HTTPException(status_code=404, detail="批次不存在")
@@ -370,6 +385,8 @@ async def export_trace_pdf(
     planting_records = db.query(PlantingRecord).filter(PlantingRecord.batch_id == seed_batch.id).all()
     plot_ids = [r.plot_id for r in planting_records]
     processing_batches = db.query(ProcessingBatch).filter(ProcessingBatch.seed_batch_id == seed_batch.id).all()
+    # 过滤掉 seed 脚本中可能产生的纯数字/无意义测试批次，只保留有规范批次号的记录
+    processing_batches = [pb for pb in processing_batches if pb.batch_code and re.match(r'^[A-Z]{2,}-\d{4}-', pb.batch_code)]
     processing_batch_ids = [pb.id for pb in processing_batches]
     processing_batch_codes = [pb.batch_code for pb in processing_batches]
 
@@ -439,7 +456,7 @@ async def export_trace_pdf(
 
     header_data = [
         ["批次编号", batch_code, "报告生成时间", now_cn_naive().strftime("%Y-%m-%d %H:%M:%S")],
-        ["品种名称", seed_batch.variety_name or "-", "状态", seed_batch.status or "-"],
+        ["品种名称", seed_batch.variety_name or "-", "状态", fmt_status(seed_batch.status)],
     ]
     header_table = Table(header_data, colWidths=[90, 180, 90, 120])
     header_table.setStyle(TableStyle([
@@ -490,7 +507,7 @@ async def export_trace_pdf(
         ["净含量", f"{seed_batch.net_weight} kg" if seed_batch.net_weight is not None else "-"],
         ["发芽率", f"{seed_batch.germination_rate}%" if seed_batch.germination_rate is not None else "-"],
         ["纯度", f"{seed_batch.purity}%" if seed_batch.purity is not None else "-"],
-        ["状态", seed_batch.status or "-"],
+        ["状态", fmt_status(seed_batch.status)],
     ]
     seed_table = Table(seed_data, colWidths=[120, 300])
     seed_table.setStyle(TableStyle([
@@ -622,10 +639,17 @@ async def export_trace_pdf(
 
         for insp in inspections:
             elements.append(Paragraph(f"报告编号：{insp.report_code}", normal_style))
+            # 检测结果：True=合格，False=不合格，None/NULL=待审核
+            if insp.is_qualified is True:
+                result_label = "合格"
+            elif insp.is_qualified is False:
+                result_label = "不合格"
+            else:
+                result_label = "待审核"
             insp_info = [
                 ["检测类型", insp.report_type or "-", "检测机构", insp.inspection_agency or "-"],
                 ["检测日期", insp.report_date.strftime("%Y-%m-%d") if insp.report_date else "-", "检测员", insp.inspector or "-"],
-                ["检测结果", "合格" if insp.is_qualified else "不合格", "", ""],
+                ["检测结果", result_label, "", ""],
             ]
             insp_table = Table(insp_info, colWidths=[90, 150, 90, 150])
             insp_table.setStyle(TableStyle([
@@ -674,7 +698,7 @@ async def export_trace_pdf(
             pb_info = [
                 ["加工批次", pb.batch_code, "产品名称", pb.product_name or "-"],
                 ["产品等级", pb.product_grade or "-", "加工日期", pb.processing_date.strftime("%Y-%m-%d") if pb.processing_date else "-"],
-                ["状态", pb.status or "-", "", ""],
+                ["状态", fmt_status(pb.status), "", ""],
             ]
             pb_table = Table(pb_info, colWidths=[90, 150, 90, 150])
             pb_table.setStyle(TableStyle([
@@ -699,8 +723,9 @@ async def export_trace_pdf(
 
     # ===== 六、仓储物流信息 =====
     inventory_items = db.query(InventoryItem).filter(
-        InventoryItem.batch_code.in_(processing_batch_codes) |
-        (InventoryItem.seed_batch_code == seed_batch.batch_code)
+        (InventoryItem.batch_code.in_(processing_batch_codes) |
+        (InventoryItem.seed_batch_code == seed_batch.batch_code)) &
+        (~InventoryItem.item_code.like('INV-PRO-%'))
     ).all()
     if inventory_items:
         elements.append(Paragraph("六、仓储物流信息", sub_title_style))
@@ -712,7 +737,7 @@ async def export_trace_pdf(
                 item.item_name or "-",
                 str(item.quantity) if item.quantity is not None else "-",
                 item.unit or "-",
-                item.status or "-",
+                fmt_status(item.status),
             ])
         inv_table = Table(inv_data, colWidths=[100, 140, 70, 60, 80])
         inv_table.setStyle(TableStyle([
@@ -728,9 +753,12 @@ async def export_trace_pdf(
         elements.append(Spacer(1, 20))
 
     # ===== 七、终端销售信息 =====
+    # 关联订单：过滤掉二维码测试订单，避免出现在正式 PDF 报告中
+    qr_test_order_ids = [o.id for o in db.query(Order).filter(Order.order_no.like('SO-QRTEST-%')).all()]
     order_items = db.query(OrderItem).filter(
-        OrderItem.batch_code.in_(processing_batch_codes) |
-        (OrderItem.seed_batch_code == batch_code)
+        (OrderItem.batch_code.in_(processing_batch_codes) |
+        (OrderItem.seed_batch_code == batch_code)) &
+        (~OrderItem.order_id.in_(qr_test_order_ids))
     ).all()
     if order_items:
         elements.append(Paragraph("七、终端销售信息", sub_title_style))
@@ -745,7 +773,7 @@ async def export_trace_pdf(
                 oi.unit or "-",
                 f"{oi.unit_price:.2f}" if oi.unit_price is not None else "-",
                 order.order_date.strftime("%Y-%m-%d") if order and order.order_date else "-",
-                order.status if order else "-",
+                fmt_status(order.status),
             ])
         sales_table = Table(sales_data, colWidths=[90, 110, 45, 45, 60, 80, 60])
         sales_table.setStyle(TableStyle([
