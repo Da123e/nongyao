@@ -134,11 +134,15 @@ async def create_inventory_item(
 
     try:
         from app.core.qrcode_generator import generate_trace_qrcode
+        from app.core.batch_resolver import resolve_seed_batch_code
         forwarded_scheme = request.headers.get("X-Forwarded-Proto") or request.url.scheme
         forwarded_host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host")
+        # payload 归一化：种子批次 > 加工批次（反查归一化）> 商品编码兜底，保证扫码可直接命中
+        raw_batch = item.seed_batch_code or item.batch_code or item.item_code
+        qr_payload_batch = resolve_seed_batch_code(raw_batch, db) if raw_batch else raw_batch
         qr_result = generate_trace_qrcode(
             item.item_code,
-            item.seed_batch_code or item.batch_code or item.item_code,
+            qr_payload_batch,
             request_host=forwarded_host,
             request_scheme=forwarded_scheme,
             mode='public',

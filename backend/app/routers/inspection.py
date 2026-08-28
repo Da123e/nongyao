@@ -288,7 +288,11 @@ async def trace_by_batch(
     current_user: User = Depends(get_current_active_user),
 ):
     await require_permission("trace:query", current_user, db)
-    
+
+    # 溯源编码归一化：兼容 PRC 加工批次 / ITM·INV 库存编码（与 sales._build_trace_data 一致）
+    from app.core.batch_resolver import resolve_seed_batch_code
+    batch_code = resolve_seed_batch_code(batch_code, db)
+
     batch = db.query(SeedBatch).filter(SeedBatch.batch_code == batch_code).first()
     if not batch:
         raise HTTPException(status_code=404, detail="批次不存在")
@@ -376,6 +380,10 @@ async def export_trace_pdf(
     }
     def fmt_status(status: str | None, default='-') -> str:
         return STATUS_LABELS.get(status, status or default)
+
+    # 溯源编码归一化：兼容 PRC 加工批次 / ITM·INV 库存编码（与 sales._build_trace_data 一致）
+    from app.core.batch_resolver import resolve_seed_batch_code
+    batch_code = resolve_seed_batch_code(batch_code, db)
 
     seed_batch = db.query(SeedBatch).filter(SeedBatch.batch_code == batch_code).first()
     if not seed_batch:

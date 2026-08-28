@@ -394,9 +394,13 @@ async def add_order_item(
         try:
             forwarded_scheme = request.headers.get("X-Forwarded-Proto") or request.url.scheme
             forwarded_host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host")
+            # payload 归一化：优先显式填写的种子批次；否则把加工批次反查归一化为种子批次，
+            # 保证二维码 payload 始终是消费者扫码可直接命中的 PB-xxx 编码
+            from app.core.batch_resolver import resolve_seed_batch_code
+            qr_payload_batch = item_data.seed_batch_code or resolve_seed_batch_code(trace_batch_code, db)
             qr_result = generate_trace_qrcode(
                 trace_batch_code,
-                item_data.seed_batch_code or trace_batch_code,
+                qr_payload_batch or trace_batch_code,
                 request_host=forwarded_host,
                 request_scheme=forwarded_scheme,
                 mode='public',
@@ -920,6 +924,11 @@ async def _build_trace_data(batch_code: str, db: Session) -> dict:
     from app.models.processing import ProcessingBatch, ProcessingRecord
     from app.models.inventory import InventoryItem
     from app.models.sales import OrderItem, Order
+    from app.core.batch_resolver import resolve_seed_batch_code
+
+    # 溯源编码归一化：二维码 payload 可能写入 PRC 加工批次 / ITM·INV 库存编码，
+    # 统一解析为种子批次编码，保证消费者扫任意码均可命中（不命中则维持原 404 行为）
+    batch_code = resolve_seed_batch_code(batch_code, db)
 
     seed_batch = db.query(SeedBatch).filter(SeedBatch.batch_code == batch_code).first()
     if not seed_batch:
