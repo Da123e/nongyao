@@ -1416,7 +1416,9 @@ function RecentOperations({ todayTodo, todayOrders, todayInbound, todayAlerts }:
       try {
         setLoading(true);
         const res = await operationsApi.getRecentOperations({ page_size: 6 });
-        const list = Array.isArray(res.data) ? res.data : (res.data?.items || []);
+        // 兼容三种返回形状：直接数组 / {items:[]} / {status,...,data:[]}
+        const d = res?.data;
+        const list = Array.isArray(d) ? d : (Array.isArray(d?.items) ? d.items : (Array.isArray(d?.data) ? d.data : []));
         setOperations(list);
       } catch {
         setOperations([]);
@@ -1529,22 +1531,31 @@ function RoleWorkflowCard({ userRole }: { userRole: string }) {
     const load = async () => {
       setLoading(true);
       try {
+        // 后端统一返回 {status, count, data: [...]}; axios 包装后 res.data 是该对象
+        // 兼容历史两种形状：直接数组 / {items:[...]} / {data:[...]}（嵌套包装）
+        const unwrap = (r: any): any[] => {
+          const d = r?.data;
+          if (Array.isArray(d)) return d;
+          if (Array.isArray(d?.data)) return d.data;
+          if (Array.isArray(d?.items)) return d.items;
+          return [];
+        };
         let list: any[] = [];
         if (userRole === 'farmer') {
           const res = await plantingApi.getFarmingActivities({ page_size: 5 });
-          list = Array.isArray(res.data) ? res.data : (res.data?.items || []);
+          list = unwrap(res);
         } else if (userRole === 'inspector') {
           const res = await inspectionApi.getReports({ page_size: 5 });
-          list = Array.isArray(res.data) ? res.data : (res.data?.items || []);
+          list = unwrap(res);
         } else if (userRole === 'warehouse_manager') {
           const res = await inventoryApi.getTransactions({ page_size: 5 });
-          list = Array.isArray(res.data) ? res.data : (res.data?.items || []);
+          list = unwrap(res);
         } else if (userRole === 'salesperson') {
           const res = await salesApi.getOrders({ page_size: 5 });
-          list = Array.isArray(res.data) ? res.data : (res.data?.items || []);
+          list = unwrap(res);
         } else {
           const res = await operationsApi.getRecentOperations({ page_size: 5 });
-          list = Array.isArray(res.data) ? res.data : (res.data?.items || []);
+          list = unwrap(res);
         }
         if (!cancelled) setItems(list);
       } catch {

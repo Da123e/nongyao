@@ -165,12 +165,17 @@ type NotificationType = 'warning' | 'info' | 'success';
 
 interface Notification {
   id: number;
-  type: NotificationType;
+  type: string;
   title: string;
   message: string;
   time: string;
   read?: boolean;
 }
+
+const getSafeNotificationType = (raw: string): NotificationType => {
+  if (raw === 'warning' || raw === 'info' || raw === 'success') return raw;
+  return 'info';
+};
 
 const typeStyles: Record<NotificationType, { bg: string; text: string; border: string; badge: string; iconBg: string }> = {
   warning: { bg: 'bg-orange-50', text: 'text-orange-600', border: 'border-orange-100', badge: 'bg-orange-100 text-orange-600', iconBg: 'bg-orange-100' },
@@ -778,8 +783,9 @@ export function Layout({ onLogout }: LayoutProps) {
                 <div className="overflow-y-auto flex-1">
                   {notifications.length > 0 ? (
                     notifications.map((notification, index) => {
-                      const Icon = typeIcons[notification.type];
-                      const styles = typeStyles[notification.type];
+                      const safeType = getSafeNotificationType(notification.type);
+                      const Icon = typeIcons[safeType];
+                      const styles = typeStyles[safeType];
                       return (
                         <motion.div
                           key={notification.id}

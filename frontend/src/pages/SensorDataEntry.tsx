@@ -125,6 +125,14 @@ export function SensorDataEntry() {
     return rec?.plot_code || null;
   }, [plantingRecords]);
   const [items, setItems] = useState<MeasurementItem[]>([{ name: '', value: 0, unit: '' }]);
+  // 数值输入草稿：input 展示原始文本（保留 "0." 这类中间态），失焦/提交时才归位为数字，
+  // 避免受控数字输入在输入过程中丢小数点
+  const [drafts, setDrafts] = useState<Record<number, string>>({});
+  // 防止轮询刷新覆盖表单：记录「当前表单已按哪台传感器初始化」与「上一帧是否处于模拟/硬件模式」。
+  // 传感器列表每 12 秒轮询（WS 消息也会触发），若以列表刷新为初始化条件，
+  // 用户手动录入的数值会被默认值（0）反复覆盖
+  const initializedForSensorRef = useRef<string | null>(null);
+  const prevLiveModeRef = useRef(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [autoReport, setAutoReport] = useState(false);
   const [lastReport, setLastReport] = useState<any>(null);
@@ -305,40 +313,54 @@ export function SensorDataEntry() {
   }, [seedBatchCode, selectedSensor]);
 
   useEffect(() => {
-    if (selectedSensor) {
-      const sensor = sensors.find((s) => s.device_id === selectedSensor);
-      if (sensor) {
-        if (sensor.type !== 'pesticide') {
-          setAutoReport(false);
-        }
-        if (!seedBatchCode && sensor.seed_batch_code) {
-          setSeedBatchCode(sensor.seed_batch_code);
-        }
-        // 仅「非模拟/非硬件」模式用 default_items 初始化 value=0
-        //    模拟/硬件模式下数值由 SensorContext 实时写入，避免被 sensors 更新意外清零
-        if (sensor.default_items && sensor.default_items.length > 0) {
-          if (!sensorState.isSimulating && !sensorState.isHardwareConnected) {
-            setItems(
-              sensor.default_items.map((item) => ({
-                name: item.name,
-                value: 0,
-                unit: item.unit || '',
-              }))
-            );
-          }
-        } else if (!sensorState.isSimulating && !sensorState.isHardwareConnected) {
-          setItems([{ name: '', value: 0, unit: '' }]);
-        }
-      } else if (!sensorState.isSimulating && !sensorState.isHardwareConnected) {
-        setItems([{ name: '', value: 0, unit: '' }]);
-      }
-    } else if (!sensorState.isSimulating && !sensorState.isHardwareConnected) {
+    const sensor = selectedSensor ? sensors.find((s) => s.device_id === selectedSensor) : undefined;
+    const liveMode = sensorState.isSimulating || sensorState.isHardwareConnected;
+
+    // 表单只在两种「明确的时刻」初始化一次：
+    //   1) 选中的传感器发生了变化（含清空）
+    //   2) 模拟/硬件模式刚结束（数值此前由 SensorContext 写入，需恢复可编辑的默认表单）
+    // 其余情况（传感器列表轮询刷新产生新数组引用）一律跳过，否则会覆盖用户正在输入的内容
+    const sensorChanged = selectedSensor !== initializedForSensorRef.current;
+    const liveStopped = prevLiveModeRef.current && !liveMode;
+    prevLiveModeRef.current = liveMode;
+    if (!sensorChanged && !liveStopped) return;
+    // 选中了传感器但列表尚未加载完成：推迟初始化，等列表到达后用 default_items 填充
+    if (selectedSensor && sensors.length === 0) return;
+    initializedForSensorRef.current = selectedSensor;
+
+    if (!selectedSensor) {
       setItems([{ name: '', value: 0, unit: '' }]);
+      setDrafts({});
       setMeasurements([]);
       setInputMode('manual');
       setAutoReport(false);
       setSeedBatchCode('');
+      return;
     }
+
+    // 传感器切换时刻的联动：非农药残留传感器不允许自动生成报告；自动带出传感器绑定的批次
+    if (sensor && sensor.type !== 'pesticide') {
+      setAutoReport(false);
+    }
+    if (sensor && !seedBatchCode && sensor.seed_batch_code) {
+      setSeedBatchCode(sensor.seed_batch_code);
+    }
+
+    // 正在模拟/硬件模式：数值由 SensorContext 实时写入，不用默认表单覆盖
+    if (liveMode) return;
+
+    if (sensor?.default_items && sensor.default_items.length > 0) {
+      setItems(
+        sensor.default_items.map((item) => ({
+          name: item.name,
+          value: 0,
+          unit: item.unit || '',
+        }))
+      );
+    } else {
+      setItems([{ name: '', value: 0, unit: '' }]);
+    }
+    setDrafts({});
   }, [selectedSensor, sensors, seedBatchCode, sensorState.isSimulating, sensorState.isHardwareConnected]);
 
   useEffect(() => {
@@ -574,12 +596,33 @@ export function SensorDataEntry() {
     const sensorTypeInfo = getCurrentSensorTypeInfo();
     const defaultUnit = sensorTypeInfo?.default_items[0]?.unit || '';
     setItems([...items, { name: '', value: 0, unit: defaultUnit }]);
+    // 行结构变化后按下标存的草稿会错位，直接清空最安全
+    setDrafts({});
   };
 
   const handleRemoveItem = (index: number) => {
     if (items.length > 1) {
       setItems(items.filter((_, i) => i !== index));
+      setDrafts({});
     }
+  };
+
+  // 数值输入：草稿存原始文本（保留 "0." / "0.0" 等中间态），items 同步解析后的数字
+  const handleValueChange = (index: number, raw: string) => {
+    setDrafts((prev) => ({ ...prev, [index]: raw }));
+    const parsed = parseFloat(raw);
+    const newItems = [...items];
+    newItems[index] = { ...newItems[index], value: Number.isFinite(parsed) ? parsed : 0 };
+    setItems(newItems);
+  };
+
+  const clearDraft = (index: number) => {
+    setDrafts((prev) => {
+      if (!(index in prev)) return prev;
+      const next = { ...prev };
+      delete next[index];
+      return next;
+    });
   };
 
   const handleItemChange = (index: number, field: keyof MeasurementItem, value: string | number) => {
@@ -607,7 +650,12 @@ export function SensorDataEntry() {
       return;
     }
 
-    const validItems = items.filter((item) => item.name && item.value >= 0);
+    // 草稿为空字符串 = 用户清空了还没填，视同未填写，不参与提交
+    const validItems = items.filter((item, i) => {
+      const draft = drafts[i];
+      if (draft !== undefined && draft.trim() === '') return false;
+      return Boolean(item.name) && item.value >= 0;
+    });
     if (validItems.length === 0) {
       alert('请填写至少一个检测项目');
       return;
@@ -678,6 +726,7 @@ export function SensorDataEntry() {
               }))
             );
           }
+          setDrafts({});
         }
       }
     } catch (error: any) {
@@ -1106,8 +1155,9 @@ export function SensorDataEntry() {
                       placeholder="检测项目名称"
                     />
                     <input
-                      type="number" value={item.value}
-                      onChange={(e) => handleItemChange(index, 'value', parseFloat(e.target.value) || 0)}
+                      type="number" value={drafts[index] ?? item.value}
+                      onChange={(e) => handleValueChange(index, e.target.value)}
+                      onBlur={() => clearDraft(index)}
                       className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-sm"
                       placeholder="数值" min="0" step="0.001"
                     />

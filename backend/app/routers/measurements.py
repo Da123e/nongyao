@@ -254,30 +254,18 @@ async def receive_data(
     GROWING_STATUS_ALIASES = {"growing", "播种", "已播种", "生长期", "育苗期"}
 
     def _resolve_by_planting_records():
-        """利用 planting_records 1:1 绑定，填充空缺 / 校验冲突。返回 (plot, seed_batch_code, warn)
-        核心原则：用户显式选择优先于种植记录绑定；种植记录仅在用户未提供时补全。"""
+        """利用 planting_records 1:1 绑定，填充空缺 / 校验冲突。
+        核心原则：用户显式选择 > sensor 自身绑定 > 种植记录补全。
+        种植记录仅用于补全缺失项，绝不覆盖用户或传感器已显式指定的地块。"""
         nonlocal final_plot, final_plot_code, final_seed_batch_code, planting_record
-        user_provided_plot = bool(user_plot_code)
-        user_provided_batch = bool(user_seed_batch_code)
 
-        # 2-a) 已知批次 → 查最近一条种植记录 → 拿到地块（仅用于补全，不覆盖用户显式选择）
-        if final_seed_batch_code:
-            pr = (
-                db.query(PlantingRecord)
-                .filter(PlantingRecord.seed_batch_code == final_seed_batch_code)
-                .order_by(PlantingRecord.planting_date.desc())
-                .first()
-            )
-            if pr:
-                planting_record = pr
-                p = db.query(Plot).filter(Plot.id == pr.plot_id).first()
-                if p:
-                    final_plot = p
-                    # 仅在用户未显式选择地块时才用种植记录补全
-                    if not user_provided_plot and not final_plot_code:
-                        final_plot_code = p.plot_code
+        # 2-a) 先把手头已有的地块编码解析成 Plot 对象（显式参数 / sensor 绑定优先）
+        if final_plot_code and not final_plot:
+            p = db.query(Plot).filter(Plot.plot_code == final_plot_code).first()
+            if p:
+                final_plot = p
 
-        # 2-b) 已知地块 → 查最近一条非终态(别名覆盖)种植记录 → 拿到批次
+        # 2-b) 有地块但无批次：用该地块的种植记录补全批次
         if final_plot and not final_seed_batch_code:
             pr = (
                 db.query(PlantingRecord)
@@ -293,25 +281,23 @@ async def receive_data(
                 final_seed_batch_code = pr.seed_batch_code
             return
 
-        # 2-c) 前面没有 final_plot 但有 final_plot_code 字符串 → 先查 plot 再查批次
-        if final_plot_code and not final_plot:
-            p = db.query(Plot).filter(Plot.plot_code == final_plot_code).first()
-            if p:
-                final_plot = p
-                # 仅在用户未显式选择批次时才用种植记录补全
-                if not user_provided_batch and not final_seed_batch_code:
-                    pr = (
-                        db.query(PlantingRecord)
-                        .filter(
-                            PlantingRecord.plot_id == p.id,
-                            PlantingRecord.status.in_(list(GROWING_STATUS_ALIASES)),
-                        )
-                        .order_by(PlantingRecord.planting_date.desc())
-                        .first()
-                    )
-                    if pr and pr.seed_batch_code:
-                        planting_record = pr
-                        final_seed_batch_code = pr.seed_batch_code
+        # 2-c) 有批次但无地块：用该批次的种植记录补全地块
+        # 说明：传感器只绑定了批次、没绑定地块，或上传 payload 只带了批次
+        if final_seed_batch_code and not final_plot:
+            pr = (
+                db.query(PlantingRecord)
+                .filter(PlantingRecord.seed_batch_code == final_seed_batch_code)
+                .order_by(PlantingRecord.planting_date.desc())
+                .first()
+            )
+            if pr:
+                planting_record = pr
+                p = db.query(Plot).filter(Plot.id == pr.plot_id).first()
+                if p:
+                    final_plot = p
+                    final_plot_code = p.plot_code
+                    # 以种植记录里的权威批次为准，覆盖 sensor 绑定中可能过期的批次
+                    final_seed_batch_code = pr.seed_batch_code
 
     _resolve_by_planting_records()
 
@@ -689,9 +675,11 @@ async def get_dashboard_environment_aggregate(
             bucket_age = (now - mem["updated_at"]).total_seconds() if mem.get("updated_at") else 9999
             plots_result.append({
                 "plot_code": plot.plot_code,
-                "plot_name": mem.get("plot_name") or plot.name,
+                # 地块名称是 Plot 表静态元数据，不能被实时缓存中的错误名称覆盖
+                "plot_name": plot.name,
                 "location": plot.location,
-                "seed_batch_code": mem.get("seed_batch_code") or batch_map.get(plot.plot_code),
+                # 批次优先以种植记录 1:1 绑定为准，mem 中的 seed_batch_code 仅作兜底
+                "seed_batch_code": batch_map.get(plot.plot_code) or mem.get("seed_batch_code"),
                 "updated_at": mem["updated_at"].isoformat() if mem.get("updated_at") else None,
                 "age_s": bucket_age,
                 "items": items_6,
