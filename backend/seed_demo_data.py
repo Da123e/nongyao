@@ -12,10 +12,15 @@ idempotent：用唯一业务编码去重（IR-2026-* / HV-2026-* / PRC-2026-* �
 """
 import pymysql
 from datetime import datetime, timedelta
+import os
 import sys
 
-CONN_KW = dict(host='localhost', user='root', password='__REDACTED__',
-               database='nongyao', charset='utf8mb4')
+# 数据库连接参数从环境变量读取，避免硬编码凭据
+# 用法：DB_PASSWORD=xxx python seed_demo_data.py（或先 export DB_PASSWORD）
+CONN_KW = dict(host=os.getenv('DB_HOST', 'localhost'),
+               user=os.getenv('DB_USER', 'root'),
+               password=os.environ['DB_PASSWORD'],
+               database=os.getenv('DB_NAME', 'nongyao'), charset='utf8mb4')
 
 conn = pymysql.connect(**CONN_KW)
 cur = conn.cursor()

@@ -66,8 +66,9 @@ sequenceDiagram
 
     Note over F,DB: 阶段 8：销售出库「上链点 ⑩」· 消费者扫码溯源
     actor C as 🛒 消费者
-    C->>FE: 扫码 → /trace 溯源查询
+    C->>FE: 扫码 → /trace 溯源查询<br>种子PB / 加工PRC / 库存ITM·INV 码均可
     FE->>BE: GET /api/sales/trace_by_batch
+    BE->>BE: batch_resolver 批次编码归一化<br>三级反查统一解析到种子批次 PB
     BE->>DB: 聚合 9 模块数据 + 链记录
     BE->>BC: verify_chain_integrity 哈希校验
     BC-->>BE: 链上哈希 vs 数据库哈希 → 一致✅
