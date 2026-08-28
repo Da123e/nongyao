@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Plus, Search, Factory, Clock, X, Eye, ChevronDown, ChevronUp, Link2, CheckCircle } from 'lucide-react';
 import { processingApi, seedApi } from '../services/api';
@@ -223,8 +223,8 @@ export function ProcessingManage() {
                   const batchIndex = seedBatches.findIndex(b => b.batch_code === batch.seed_batch_code);
                   const colorIndex = batchIndex >= 0 ? batchIndex : index;
                   return (
-                    <>
-                      <tr key={batch.id} className="hover:bg-gray-50">
+                    <Fragment key={batch.id}>
+                      <tr className="hover:bg-gray-50">
                         <td className="px-6 py-4">
                           <button onClick={() => toggleBatchDetail(batch.batch_code)} className="text-gray-400 hover:text-green-500">
                             {expandedBatch === batch.batch_code ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -302,7 +302,7 @@ export function ProcessingManage() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   );
                 })}
             </tbody>

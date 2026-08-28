@@ -593,6 +593,7 @@ async def seed_data(db: Session = Depends(get_db)):
         ],
         "inspector": [
             "seed:query",
+            "planting:query",                    # 质检员需要查看地块/种植记录以关联检测
             "inspection:quality", "inspection:query",
             "trace:query",
             "sensors:query", "sensors:submit",  # 质检员可以手动提交传感器数据补充证据
