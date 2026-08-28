@@ -480,9 +480,10 @@ async def export_trace_pdf(
             ["已存证环节数", str(len(blockchain_records))],
             ["已上链记录数", str(on_chain_count)],
             ["最近存证时间", (blockchain_records[0].uploaded_at.strftime("%Y-%m-%d %H:%M:%S") if blockchain_records[0].uploaded_at else "-")],
-            ["最近数据哈希", (blockchain_records[0].data_hash[:16] + "..." if blockchain_records[0].data_hash else "-")],
+            ["最近数据哈希", (blockchain_records[0].data_hash or "-")],
         ]
-        chain_table = Table(chain_summary, colWidths=[120, 300])
+        # 哈希为 64 位 hex，需要较宽列；A4 可用宽度约 495pt，120+360=480pt 可放下
+        chain_table = Table(chain_summary, colWidths=[120, 360])
         chain_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f0fdf4')),
             ('BACKGROUND', (0, 1), (-1, -1), colors.white),
