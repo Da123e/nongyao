@@ -371,6 +371,7 @@ async def add_order_item(
     order_id: int,
     request: Request,
     item_data: OrderItemCreate,
+    url_prefix: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
@@ -401,6 +402,7 @@ async def add_order_item(
             qr_result = generate_trace_qrcode(
                 trace_batch_code,
                 qr_payload_batch or trace_batch_code,
+                url_prefix=url_prefix,
                 request_host=forwarded_host,
                 request_scheme=forwarded_scheme,
                 mode='public',

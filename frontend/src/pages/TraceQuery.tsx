@@ -188,9 +188,16 @@ export function TraceQuery({ publicMode = false }: { publicMode?: boolean }) {
   const loadImage = (file: File): Promise<HTMLImageElement> => {
     return new Promise((resolve, reject) => {
       const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = reject;
-      img.src = URL.createObjectURL(file);
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve(img);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('图片加载失败'));
+      };
+      img.src = url;
     });
   };
 
@@ -232,6 +239,12 @@ export function TraceQuery({ publicMode = false }: { publicMode?: boolean }) {
     setTimeout(async () => {
       if (scanClosedRef.current) return;
       try {
+        // 前置校验：非 HTTPS / 微信内置浏览器 / 无权限等场景 mediaDevices 可能不存在
+        if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+          throw new Error(
+            '当前浏览器环境不支持直接调用相机，请改为「从相册上传二维码」或手动输入批次号'
+          );
+        }
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
           audio: false,

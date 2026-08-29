@@ -115,6 +115,7 @@ async def get_inventory(
 async def create_inventory_item(
     item_data: InventoryItemCreate,
     request: Request,
+    url_prefix: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
@@ -143,6 +144,7 @@ async def create_inventory_item(
         qr_result = generate_trace_qrcode(
             item.item_code,
             qr_payload_batch,
+            url_prefix=url_prefix,
             request_host=forwarded_host,
             request_scheme=forwarded_scheme,
             mode='public',

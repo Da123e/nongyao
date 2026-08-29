@@ -115,6 +115,12 @@ export function InventoryManage() {
     scanClosedRef.current = false;
 
     try {
+      // 前置校验：非 HTTPS / 微信内置浏览器等场景 mediaDevices 可能不存在
+      if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+        throw new Error(
+          '当前浏览器环境不支持直接调用相机，请改为手动输入批次号'
+        );
+      }
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,

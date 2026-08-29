@@ -159,7 +159,8 @@ export const inventoryApi = {
   getWarehouses: () => api.get('/inventory/warehouses'),
   createWarehouse: (data: any) => api.post('/inventory/warehouses', data),
   getInventory: (params?: any) => api.get('/inventory/inventory', { params }),
-  createInventoryItem: (data: any) => api.post('/inventory/inventory', data),
+  createInventoryItem: (data: any) =>
+    api.post(`/inventory/inventory?url_prefix=${encodeURIComponent(window.location.origin)}`, data),
   addTransaction: (itemId: number, data: any) => api.post(`/inventory/inventory/${itemId}/transactions`, data),
   getAlerts: () => api.get('/inventory/alerts'),
   getTransactions: (params?: any) => api.get('/inventory/transactions', { params }),
@@ -181,7 +182,7 @@ export const salesApi = {
     unit: string;
     unit_price?: number;
     product_grade?: string;
-  }) => api.post(`/sales/orders/${orderId}/items`, data),
+  }) => api.post(`/sales/orders/${orderId}/items?url_prefix=${encodeURIComponent(window.location.origin)}`, data),
   updateOrderStatus: (orderId: number, status: string) => api.put(`/sales/orders/${orderId}/status`, { status }),
   addLogistics: (orderId: number, data: any) => api.post(`/sales/orders/${orderId}/logistics`, data),
   updateLogistics: (logisticsId: number, data: any) => api.put(`/sales/logistics/${logisticsId}`, data),
