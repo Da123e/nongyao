@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List
+from typing import List, Optional
 import logging
 from app.core.database import get_db
 from app.models.inventory import Warehouse, InventoryItem, InventoryTransaction
