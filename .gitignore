@@ -57,3 +57,5 @@ backend/contracts/contract_address.txt
 _rules.txt
 trace_export_sales.png
 assets/puppeteer-config.json
+# 计划书内部素材文档 · 不推送
+docs/plan-materials.md

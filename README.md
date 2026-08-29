@@ -179,11 +179,13 @@ flowchart TB
         B11[🔔 通知中心 · /api/notifications<br>用户通知 CRUD · 未读计数 · 全部已读]
         B_WS[⚡ WebSocket /api/ws<br>传感器实时数据广播]
         B_Helper{{notifications_helper.py<br>订单 报告 种子 库存 农药 · 5 场景自动推送}}
+        B_Resolver{{batch_resolver.py 批次编码归一化<br>种子PB → 加工PRC → 库存ITM/INV 三级反查<br>任意环节码扫码均可命中溯源}}
         B_Auth{{auth.py 中间件<br>bcrypt 哈希 · JWT 签发 · require_permission<br>RBAC 权限点校验}}
         B_Migrate{{自动列迁移<br>environmental_data 6 土壤参数列自动补齐}}
     end
     class B1,B2,B3,B4,B5,B6,B7,B8,B9,B10,B11,B_WS beRouter
-    class B_Helper,B_Auth,B_Migrate beCore
+    class B_Helper,B_Resolver,B_Auth,B_Migrate beCore
+    B_Resolver -.-> B10
 
     B2 --> C1
     B3 --> C1
@@ -292,8 +294,9 @@ sequenceDiagram
 
     Note over F,DB: 阶段 8：销售出库「上链点 ⑩」· 消费者扫码溯源
     actor C as 🛒 消费者
-    C->>FE: 扫码 → /trace 溯源查询
+    C->>FE: 扫码 → /trace 溯源查询（任意环节码 PB/PRC/ITM/INV）
     FE->>BE: GET /api/sales/trace_by_batch
+    BE->>BE: batch_resolver 归一化 → 反查种子批次
     BE->>DB: 聚合 9 模块数据 + 链记录
     BE->>BC: verify_chain_integrity 哈希校验
     BC-->>BE: 链上哈希 vs 数据库哈希 → 一致✅
