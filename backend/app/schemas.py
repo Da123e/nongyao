@@ -268,6 +268,7 @@ class InspectionReportCreate(BaseModel):
     batch_code: Optional[str] = Field(None, description="种子批次编码")
     processing_batch_code: Optional[str] = Field(None, description="加工批次编码")
     plot_code: Optional[str] = Field(None, description="地块编码")
+    report_date: Optional[datetime] = Field(None, description="检测日期")
     inspector: Optional[str] = Field(None, description="检验员")
     inspection_agency: Optional[str] = Field(None, description="检验机构")
     certificate_no: Optional[str] = Field(None, description="证书编号")

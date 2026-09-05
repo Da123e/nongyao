@@ -1,0 +1,33 @@
+# 金生链 · 后端 systemd 服务
+# 部署位置：/etc/systemd/system/nongyao.service
+# 常用命令：
+#   启动  sudo systemctl start nongyao
+#   重启  sudo systemctl restart nongyao
+#   状态  sudo systemctl status nongyao
+#   日志  sudo journalctl -u nongyao -f
+
+[Unit]
+Description=Jinshenglian FastAPI Backend
+After=network.target mariadb.service
+Wants=mariadb.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/nongyao/backend
+Environment="PATH=/home/ubuntu/nongyao/backend/venv/bin"
+Environment="TZ=Asia/Shanghai"
+
+# 注意：必须用 --workers 1
+# 本项目的 WebSocket 连接管理器是进程内内存变量，开多进程时
+# 传感器数据广播只会发到其中一个进程的连接，导致实时刷新时灵时不灵。
+ExecStart=/home/ubuntu/nongyao/backend/venv/bin/uvicorn main:app \
+    --host 127.0.0.1 --port 8000 --workers 1
+
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

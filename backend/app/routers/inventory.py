@@ -120,7 +120,24 @@ async def create_inventory_item(
     current_user: User = Depends(get_current_active_user),
 ):
     await require_permission("inventory:manage", current_user, db)
-    
+
+    # 防重复建档：同批次 + 同仓库已有库存条目时拒绝，引导对已有条目做入库流水
+    # （扫码入库前端已按此逻辑路由，这里兜底防手工绕过/并发重复提交）
+    if item_data.seed_batch_code and item_data.warehouse_id:
+        dup = db.query(InventoryItem).filter(
+            InventoryItem.seed_batch_code == item_data.seed_batch_code,
+            InventoryItem.warehouse_id == item_data.warehouse_id,
+        ).first()
+        if dup:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"批次 {item_data.seed_batch_code} 在仓库「{dup.warehouse_name or dup.warehouse_id}」"
+                    f"已有库存条目（{dup.item_name}，当前 {dup.quantity}{dup.unit or ''}），"
+                    f"请对已有条目执行入库流水累加，不要重复建档"
+                ),
+            )
+
     item = InventoryItem(**item_data.dict())
 
     warehouse = db.query(Warehouse).filter(Warehouse.id == item_data.warehouse_id).first()

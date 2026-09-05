@@ -15,6 +15,8 @@ import {
   LogOut,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Menu,
   X,
   Bell,
@@ -199,6 +201,7 @@ export function Layout({ onLogout }: LayoutProps) {
   const [activeSettingTab, setActiveSettingTab] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [expandedNotificationId, setExpandedNotificationId] = useState<number | null>(null);
   const [formData, setFormData] = useState({
     username: '',
     email: '',
@@ -435,13 +438,20 @@ export function Layout({ onLogout }: LayoutProps) {
 
   const handleMarkAsRead = (notificationId: number) => {
     notificationApi.markAsRead(notificationId).then(() => {
-      setNotifications(notifications.map(n =>
+      setNotifications(prev => prev.map(n =>
         n.id === notificationId ? { ...n, read: true } : n
       ));
       setUnreadCount(prev => Math.max(0, prev - 1));
     }).catch(err => {
       console.error('Failed to mark notification as read:', err);
     });
+  };
+
+  const handleNotificationClick = (notificationId: number, isRead: boolean) => {
+    setExpandedNotificationId(prev => prev === notificationId ? null : notificationId);
+    if (!isRead) {
+      handleMarkAsRead(notificationId);
+    }
   };
 
   const handleMarkAllRead = () => {
@@ -786,13 +796,14 @@ export function Layout({ onLogout }: LayoutProps) {
                       const safeType = getSafeNotificationType(notification.type);
                       const Icon = typeIcons[safeType];
                       const styles = typeStyles[safeType];
+                      const isExpanded = expandedNotificationId === notification.id;
                       return (
                         <motion.div
                           key={notification.id}
                           initial={{ opacity: 0, x: -20 }}
                           animate={{ opacity: 1, x: 0 }}
                           transition={{ delay: index * 0.05 }}
-                          onClick={() => handleMarkAsRead(notification.id)}
+                          onClick={() => handleNotificationClick(notification.id, notification.read)}
                           className={`p-4 hover:bg-gray-50 border-b border-gray-50 cursor-pointer transition-all duration-200 last:border-0 ${notification.read ? 'opacity-70' : ''}`}
                         >
                           <div className="flex items-start gap-3">
@@ -809,8 +820,17 @@ export function Layout({ onLogout }: LayoutProps) {
                                   {notification.type === 'warning' ? '预警' : notification.type === 'success' ? '成功' : '信息'}
                                 </span>
                               </div>
-                              <p className="text-sm text-gray-500 mt-1 line-clamp-2">{notification.message}</p>
-                              <p className="text-xs text-gray-400 mt-2">{notification.time}</p>
+                              <p className={`text-sm text-gray-500 mt-1 break-words whitespace-pre-wrap ${isExpanded ? '' : 'line-clamp-2'}`}>{notification.message}</p>
+                              <div className="flex items-center justify-between mt-2">
+                                <p className="text-xs text-gray-400">{notification.time}</p>
+                                <span className="text-xs text-gray-400 flex items-center gap-0.5">
+                                  {isExpanded ? (
+                                    <><ChevronUp className="w-3 h-3" /> 收起</>
+                                  ) : (
+                                    <><ChevronDown className="w-3 h-3" /> 展开</>
+                                  )}
+                                </span>
+                              </div>
                             </div>
                           </div>
                         </motion.div>

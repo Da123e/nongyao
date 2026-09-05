@@ -1,0 +1,7 @@
+# 保证部署相关文件在 Linux 上是 LF 换行
+# Windows 下 git 默认会把换行转成 CRLF，若 shell 脚本带 CRLF，
+# 到 Linux 上执行会报 /bin/bash^M: bad interpreter，脚本直接跑不起来。
+*.sh text eol=lf
+*.conf text eol=lf
+*.service text eol=lf
+*.template text eol=lf

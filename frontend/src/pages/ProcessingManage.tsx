@@ -348,7 +348,7 @@ export function ProcessingManage() {
 
       {showModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-lg">
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-800">添加加工批次</h3>
               <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600">
@@ -513,7 +513,7 @@ export function ProcessingManage() {
 
       {showDetail && selectedBatch && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-800">加工批次详情</h3>
               <button onClick={() => setShowDetail(false)} className="text-gray-400 hover:text-gray-600">

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Search, ShoppingCart, Truck, User, X, Eye, Package, Link2, MapPin, Edit3, Clock, Filter, AlertTriangle, BadgeCheck, PackageCheck, ArrowRightLeft, QrCode, Download, ArrowRight, Navigation, CheckCircle2 } from 'lucide-react';
+import { Plus, Search, ShoppingCart, Truck, User, X, Eye, Package, Link2, MapPin, Edit3, Clock, Filter, AlertTriangle, BadgeCheck, PackageCheck, ArrowRightLeft, QrCode, Download, ArrowRight, Navigation, CheckCircle2, AlertCircle } from 'lucide-react';
 import { salesApi, seedApi, processingApi } from '../services/api';
 import type { Order, Customer, OrderItem, SeedBatch, LogisticsTracking } from '../types/index.ts';
 import { BatchChainView } from '../components/BatchChainView';
@@ -71,6 +71,7 @@ export function SalesManage() {
   const [showLogisticsModal, setShowLogisticsModal] = useState(false);
   const [logisticsFormData, setLogisticsFormData] = useState<any>({});
   const [editingLogistics, setEditingLogistics] = useState(false);
+  const [editingLogisticsId, setEditingLogisticsId] = useState<number | null>(null);
   const [currentOrderId, setCurrentOrderId] = useState<number | null>(null);
   const [showAddItemModal, setShowAddItemModal] = useState(false);
   const [itemFormData, setItemFormData] = useState<any>({});
@@ -297,6 +298,7 @@ export function SalesManage() {
   const handleAddLogistics = (orderId: number) => {
     setCurrentOrderId(orderId);
     setEditingLogistics(false);
+    setEditingLogisticsId(null);
     setLogisticsFormData({
       tracking_no: '',
       carrier: '',
@@ -311,6 +313,7 @@ export function SalesManage() {
   const handleEditLogistics = (orderId: number, logistics: any) => {
     setCurrentOrderId(orderId);
     setEditingLogistics(true);
+    setEditingLogisticsId(logistics.id);
     setLogisticsFormData({
       tracking_no: logistics.tracking_no || '',
       carrier: logistics.carrier || '',
@@ -336,8 +339,8 @@ export function SalesManage() {
       return;
     }
     try {
-      if (editingLogistics) {
-        await salesApi.updateLogistics(selectedOrder.logistics.id, logisticsFormData);
+      if (editingLogistics && editingLogisticsId) {
+        await salesApi.updateLogistics(editingLogisticsId, logisticsFormData);
       } else {
         await salesApi.addLogistics(currentOrderId!, logisticsFormData);
       }
@@ -806,7 +809,7 @@ export function SalesManage() {
 
       {showModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-lg">
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-800">
                 {modalType === 'order' ? '创建订单' : '添加客户'}
@@ -1171,12 +1174,14 @@ export function SalesManage() {
                               >
                                 <Eye className="w-3 h-3" /> 查看详情
                               </button>
-                              <button
-                                onClick={() => { setCurrentOrderId(selectedOrder.id); setEditingLogistics(true); setLogisticsFormData({ tracking_no: lg.tracking_no, carrier: lg.carrier, status: lg.status, origin: lg.origin, destination: lg.destination, current_location: lg.current_location, vehicle_no: lg.vehicle_no, driver_name: lg.driver_name, driver_phone: lg.driver_phone }); setShowLogisticsModal(true); }}
-                                className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
-                              >
-                                <Edit3 className="w-3 h-3" /> 编辑
-                              </button>
+                              {!['signed', 'completed', 'cancelled'].includes(lg.status) && (
+                                <button
+                                  onClick={() => { setCurrentOrderId(selectedOrder.id); setEditingLogistics(true); setEditingLogisticsId(lg.id); setLogisticsFormData({ tracking_no: lg.tracking_no, carrier: lg.carrier, status: lg.status, origin: lg.origin, destination: lg.destination, current_location: lg.current_location, vehicle_no: lg.vehicle_no, driver_name: lg.driver_name, driver_phone: lg.driver_phone }); setShowLogisticsModal(true); }}
+                                  className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                                >
+                                  <Edit3 className="w-3 h-3" /> 编辑
+                                </button>
+                              )}
                             </div>
                           )}
                         </div>
@@ -1435,7 +1440,7 @@ export function SalesManage() {
 
       {showLogisticsModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-lg">
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-800">
                 {editingLogistics ? '更新物流信息' : '添加物流信息'}
@@ -1504,12 +1509,24 @@ export function SalesManage() {
                   <select
                     value={logisticsFormData.status || 'pending'}
                     onChange={(e) => setLogisticsFormData({ ...logisticsFormData, status: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 disabled:bg-gray-100 disabled:text-gray-500"
+                    disabled={editingLogistics && ['signed', 'completed', 'cancelled'].includes(logisticsFormData.status)}
                   >
-                    {logisticsStatusOptions.filter(o => !['completed', 'cancelled'].includes(o.value)).map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
+                    {(() => {
+                      const currentIdx = LOGISTICS_FLOW.indexOf(logisticsFormData.status || 'pending');
+                      return logisticsStatusOptions.filter(o => {
+                        if (o.value === 'completed') return false;
+                        if (o.value === 'cancelled') return true;
+                        if (!editingLogistics) return true;
+                        return LOGISTICS_FLOW.indexOf(o.value) >= currentIdx;
+                      }).map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ));
+                    })()}
                   </select>
+                  {editingLogistics && ['signed', 'completed', 'cancelled'].includes(logisticsFormData.status) && (
+                    <p className="text-xs text-orange-600 mt-1">已签收/已完成/已取消运单不可修改状态</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">当前位置</label>
@@ -1644,10 +1661,29 @@ export function SalesManage() {
                 </ol>
               </div>
 
+              {/* === 终态提示 === */}
+              {['signed', 'completed', 'cancelled'].includes(selectedLogistics.status) && (
+                <div className={`rounded-2xl border p-4 flex items-start gap-3 ${selectedLogistics.status === 'cancelled' ? 'border-red-200 bg-red-50/40' : 'border-green-200 bg-green-50/40'}`}>
+                  {selectedLogistics.status === 'cancelled' ? <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" /> : <BadgeCheck className="w-5 h-5 text-green-600 flex-shrink-0" />}
+                  <div>
+                    <div className="text-sm font-semibold text-gray-800">
+                      {selectedLogistics.status === 'cancelled' ? '该运单已取消' : selectedLogistics.status === 'signed' ? '该运单已签收，无需继续更新物流' : '该运单已完成，无需继续更新物流'}
+                    </div>
+                    {selectedLogistics.status !== 'cancelled' && (
+                      <div className="text-xs text-gray-500 mt-1">
+                        签收人：{selectedLogistics.signer || '-'} · 签收时间：{selectedLogistics.sign_time ? new Date(selectedLogistics.sign_time).toLocaleString('zh-CN') : '-'}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* === 物流快捷进度操作 === */}
-              {canManageLogistics() && (() => {
+              {canManageLogistics() && !['signed', 'completed', 'cancelled'].includes(selectedLogistics.status) && (() => {
                 const nextStatus = getNextStatus(selectedLogistics.status);
                 const isAtDestination = selectedLogistics.current_location === selectedLogistics.destination;
+                const statusIdx = LOGISTICS_FLOW.indexOf(selectedLogistics.status);
+                const arrivedIdx = LOGISTICS_FLOW.indexOf('arrived');
                 return (
                   <div className="rounded-2xl border-2 border-dashed border-green-200 bg-green-50/40 p-4 space-y-3">
                     <div className="flex items-center gap-2 text-sm font-semibold text-green-700">
@@ -1664,8 +1700,8 @@ export function SalesManage() {
                         <MapPin className="w-3.5 h-3.5" />
                         更新当前位置
                       </button>
-                      {/* 快捷：推进到下一状态 */}
-                      {nextStatus && (
+                      {/* 快捷：推进到下一状态（签收必须走客户签收按钮，不能跳过） */}
+                      {nextStatus && nextStatus !== 'signed' && (
                         <button
                           onClick={() => handleQuickProgress(selectedLogistics, nextStatus)}
                           disabled={progressing}
@@ -1675,8 +1711,8 @@ export function SalesManage() {
                           推进到「{getStatusLabel(nextStatus)}」
                         </button>
                       )}
-                      {/* 快捷：直接标记到达目的地 */}
-                      {!isAtDestination && selectedLogistics.destination && (
+                      {/* 快捷：直接标记到达目的地（仅在到达前可用） */}
+                      {!isAtDestination && selectedLogistics.destination && statusIdx < arrivedIdx && (
                         <button
                           onClick={() => handleQuickProgress(selectedLogistics, 'arrived')}
                           disabled={progressing}
@@ -1686,8 +1722,8 @@ export function SalesManage() {
                           到达「{selectedLogistics.destination}」
                         </button>
                       )}
-                      {/* 快捷：客户签收 */}
-                      {(selectedLogistics.status === 'delivered' || selectedLogistics.status === 'arrived') && (
+                      {/* 快捷：客户签收（必须填写签收人，且只能从已派送状态进入） */}
+                      {selectedLogistics.status === 'delivered' && (
                         <button
                           onClick={() => {
                             const signer = prompt('请输入签收人姓名', selectedLogistics.signer || '');
@@ -1704,6 +1740,7 @@ export function SalesManage() {
                                   setSelectedOrder(r.data || r);
                                 });
                               }
+                              setShowLogisticsDetail(false);
                               alert(`客户「${signer}」已签收`);
                             }).catch((e: any) => alert(e?.response?.data?.detail || e?.message || '签收失败'))
                               .finally(() => setProgressing(false));
@@ -1717,7 +1754,7 @@ export function SalesManage() {
                       )}
                     </div>
                     <p className="text-xs text-green-600">
-                      💡 运输途中可随时更新当前位置；到达目的地后点击"到达"或"客户签收"即可流转状态
+                      💡 运输途中可随时更新当前位置；已派送时请点击"客户签收"并填写签收人完成流转。
                     </p>
                   </div>
                 );
@@ -1725,7 +1762,7 @@ export function SalesManage() {
 
               <div className="flex justify-end gap-2 pt-2">
                 <button onClick={() => setShowLogisticsDetail(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-xl">关闭</button>
-                {canManageLogistics() && (
+                {canManageLogistics() && !['signed', 'completed', 'cancelled'].includes(selectedLogistics.status) && (
                   <button
                     onClick={() => {
                       setShowLogisticsDetail(false);

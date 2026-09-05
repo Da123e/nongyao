@@ -19,8 +19,13 @@ __pycache__/
 htmlcov/
 .idea/
 .vscode/
+# AI 编程工具生成的配置与缓存目录 · 全部不推送
 .trae/
 .workbuddy/
+.codebuddy/
+.cursor/
+.claude/
+.augment/
 ipfs_bin/
 *.db
 .DS_Store
@@ -59,3 +64,16 @@ trace_export_sales.png
 assets/puppeteer-config.json
 # 计划书内部素材文档 · 不推送
 docs/plan-materials.md
+
+# ====== 申报材料与个人信息 · 绝不推送 ======
+# 含姓名 / 学号 / 手机号 / 队伍名单 / 匿名评审版材料
+# 公开到 GitHub 可能违反比赛匿名评审规定，也可能泄露个人隐私
+报名信息.txt
+参赛人选.txt
+参赛人.txt
+大赛通知/
+图片/
+图片资料/
+docs/
+team-materials.md
+*.pptx

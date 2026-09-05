@@ -84,27 +84,44 @@ export function InventoryManage() {
     return t;
   };
 
-  const onScanSuccess = (raw: string) => {
+  const onScanSuccess = async (raw: string) => {
     const batchCode = extractBatchFromScan(raw);
     stopScan();
     setScanOpen(false);
-    if (batchCode) {
-      // 自动打开入库表单，填入扫码得到的批次号
-      setModalType('add');
-      setFormData({
-        seed_batch_code: batchCode,
-        item_name: `扫码入库 · ${batchCode}`,
-        item_code: `SKU-${batchCode}`,
-        quantity: 1,
-        unit: '件',
-        item_type: '成品',
-        operator: '扫码入库',
-      });
-      setShowModal(true);
-      setScanResult(`✅ 已识别批次：${batchCode}，请确认入库信息后提交`);
-    } else {
+    if (!batchCode) {
       setScanError('未能从二维码中解析出有效批次号');
+      return;
     }
+    // 防重复入库：先查该批次是否已有库存条目
+    try {
+      const res = await inventoryApi.getInventory({ seed_batch_code: batchCode });
+      const existing = (res.data || [])[0];
+      if (existing) {
+        // 已有库存条目 → 走入库流水累加（同一条目数量累加，不会重复建档）
+        setSelectedItem(existing);
+        setModalType('transaction');
+        setFormData({ transaction_type: 'in' });
+        setShowModal(true);
+        setScanResult(`✅ 已识别批次：${batchCode}，该批次在「${existing.warehouse_name || '仓库'}」已有库存条目（当前 ${existing.quantity}${existing.unit}），本次扫码将作为入库流水累加，不会重复建档`);
+        return;
+      }
+    } catch (err) {
+      // 查询失败不阻塞，回退到新建表单流程
+      console.error('查询批次库存失败，按新建处理:', err);
+    }
+    // 无库存条目 → 打开新建表单（首次入库建档）
+    setModalType('add');
+    setFormData({
+      seed_batch_code: batchCode,
+      item_name: `扫码入库 · ${batchCode}`,
+      item_code: `SKU-${batchCode}`,
+      quantity: 1,
+      unit: '件',
+      item_type: '成品',
+      operator: '扫码入库',
+    });
+    setShowModal(true);
+    setScanResult(`✅ 已识别批次：${batchCode}，该批次首次入库，请确认入库信息后提交`);
   };
 
   const startScan = async () => {
@@ -462,9 +479,9 @@ export function InventoryManage() {
                           {item.traceability_qr_code && (
                             <button
                               onClick={() => {
-                                const w = window.open('', '_blank', 'width=400,height=400');
+                                const w = window.open('', '_blank', 'width=420,height=520');
                                 if (w) {
-                                  w.document.write(`<html><head><title>溯源二维码 - ${item.item_code}</title></head><body style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;"><h3>${item.item_name}</h3><img src="${item.traceability_qr_code}" style="width:256px;height:256px;"/><p style="margin-top:10px;color:#666;">扫码溯源</p></body></html>`);
+                                  w.document.write(`<html><head><title>溯源二维码 - ${item.item_code}</title></head><body style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;margin:0;"><h3>${item.item_name}</h3><img src="${item.traceability_qr_code}" style="width:280px;height:280px;"/><p style="margin-top:10px;color:#666;">手机扫码可直接打开溯源页</p><a href="${item.traceability_qr_code}" download="溯源二维码-${item.item_code}.png" style="margin-top:16px;padding:8px 24px;background:#10b981;color:#fff;text-decoration:none;border-radius:8px;font-size:14px;">下载二维码图片</a><p style="margin-top:8px;color:#999;font-size:12px;">也可在图片上右键 → 图片另存为</p></body></html>`);
                                 }
                               }}
                               className="text-gray-400 hover:text-blue-500"
@@ -542,7 +559,7 @@ export function InventoryManage() {
 
       {showModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-lg">
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-800">
                 {modalType === 'add' ? '添加库存商品' : `${formData.transaction_type === 'in' ? '入库' : '出库'}操作`}
@@ -852,7 +869,7 @@ export function InventoryManage() {
                     <div className="mt-3 p-3 bg-red-50 text-red-700 text-sm rounded-lg">{scanError}</div>
                   )}
                   <div className="mt-3 flex items-center justify-between text-sm">
-                    <span className="text-gray-400">提示：将订单商品二维码对准摄像头</span>
+                    <span className="text-gray-400" title="种子溯源管理 → 批次详情 → 打印二维码">扫描包装上的批次溯源码（种子/加工批次生成，见种子溯源管理-批次详情-打印贴纸）</span>
                     <div className="flex gap-2">
                       <button
                         onClick={() => { stopScan(); setScanOpen(false); setModalType('add'); setFormData({}); setShowModal(true); }}

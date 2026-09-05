@@ -122,6 +122,7 @@ async def create_report(
         processing_batch_id=processing_batch_id,
         plot_id=plot_id,
         report_type=data.report_type,
+        report_date=data.report_date or now_cn_naive(),
         inspector=data.inspector,
         inspection_agency=data.inspection_agency,
         certificate_no=data.certificate_no,

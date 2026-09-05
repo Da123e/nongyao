@@ -186,10 +186,24 @@ def cleanup_processes(signum=None, frame=None):
         except Exception as e:
             print(f"[ERROR] 停止 IPFS 失败: {e}")
 
-start_ganache()
-start_ipfs()
-time.sleep(2)
-deploy_contract_if_needed()
+# 按 .env 开关决定是否拉起 Ganache / IPFS。
+# 部署到服务器时把 BLOCKCHAIN_ENABLED 和 IPFS_ENABLED 设为 False，
+# 可完全跳过这两项：不装 Node/Ganache 也能跑，省掉启动尝试报错和 2 秒等待，
+# 区块链功能自动降级为本地存证，其余模块不受影响。
+if settings.BLOCKCHAIN_ENABLED:
+    start_ganache()
+else:
+    print("[INFO] BLOCKCHAIN_ENABLED=False，跳过 Ganache 启动")
+
+if settings.IPFS_ENABLED:
+    start_ipfs()
+else:
+    print("[INFO] IPFS_ENABLED=False，跳过 IPFS 节点启动")
+
+if settings.BLOCKCHAIN_ENABLED:
+    time.sleep(2)
+    deploy_contract_if_needed()
+
 _is_initialized = True
 
 from app import auth, routers, ws
