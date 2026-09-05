@@ -71,6 +71,20 @@ mkdir -p "${WEB_ROOT}"
 rm -rf "${WEB_ROOT}/dist"
 cp -r dist "${WEB_ROOT}/dist"
 
+echo "==> [6.5/7] 放行本地防火墙 80 / 443"
+# Oracle 的 Ubuntu 镜像默认只放行 22 端口。不放行 80 的话，
+# 服务明明跑着，浏览器却死活打不开 —— 这是部署后最常见的问题。
+# 注意：这只是服务器内的防火墙。Oracle 控制台那层(VCN 安全列表)仍需手动放行，
+#       两条都放行才能访问，缺一不可。
+if command -v iptables >/dev/null 2>&1; then
+    iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT 2>/dev/null || true
+    iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
+    if command -v netfilter-persistent >/dev/null 2>&1; then
+        netfilter-persistent save >/dev/null 2>&1 || true
+    fi
+    echo "    本地防火墙已放行 80/443"
+fi
+
 echo "==> [7/7] 配置并启动服务"
 sed "s|^User=.*|User=${SERVICE_USER}|" "${APP_DIR}/deploy/nongyao.service" > /etc/systemd/system/nongyao.service
 cp "${APP_DIR}/deploy/nginx.conf" /etc/nginx/sites-available/nongyao
